@@ -1319,6 +1319,8 @@ def _add_transformer_engine_args(parser):
                        help='Number of layers at start to construct in bf16 when --first-last-layers-bf16 is enabled.')
     group.add_argument('--num-layers-at-end-in-bf16', type=int, default=1,
                        help='Number of layers at end to construct in bf16 when --first-last-layers-bf16 is enabled.')
+    group.add_argument('--ladder-residual', action='store_true', default=False,
+                       help='Enable ladder residual connections')
 
     # FP4 related arguments
     group.add_argument('--fp4-format', default=None,
