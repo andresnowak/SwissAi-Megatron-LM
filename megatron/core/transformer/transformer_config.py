@@ -193,6 +193,10 @@ class TransformerConfig(ModelParallelConfig):
     moe_deepep_num_sms: int = 20
     """Number of SMs to use for DeepEP."""
 
+    ladder_residual: bool = False
+    """Whether to use ladder residual connections instead of standard residual connections. 
+    https://arxiv.org/pdf/2501.06589"""
+
     ####################
     # initialization
     ####################
