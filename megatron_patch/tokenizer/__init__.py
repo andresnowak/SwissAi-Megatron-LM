@@ -548,6 +548,16 @@ def build_tokenizer(args):
     elif args.patch_tokenizer_type == 'GPT2BPETokenizer':
         from megatron.training.tokenizer.tokenizer import _GPT2BPETokenizer
         tokenizer = _GPT2BPETokenizer(args.vocab_file, args.merge_file)
+    
+    elif args.patch_tokenizer_type == 'HuggingFaceTokenizer':
+        from megatron.training.tokenizer.tokenizer import _HuggingFaceTokenizer
+        tokenizer = _HuggingFaceTokenizer(
+            args.tokenizer_model, trust_remote_code = args.trust_remote_code
+        )
+        # We don't have ability to pass **kwargs, but it can be added
+        # tokenizer = _HuggingFaceTokenizer(
+        #     args.tokenizer_model, trust_remote_code = args.trust_remote_code, **kwargs,
+        # )
 
     elif args.patch_tokenizer_type == 'LLama2Tokenizer' or args.patch_tokenizer_type == 'MixtralTokenizer':
         from megatron.core.datasets.megatron_tokenizer import MegatronTokenizer
