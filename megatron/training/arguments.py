@@ -1593,6 +1593,10 @@ def _add_network_size_args(parser):
     group.add_argument('--onnx-safe', type=bool, required=False,
                        help='Use workarounds for known problems with '
                        'Torch ONNX exporter')
+    group.add_argument('--gated-softmax-attention', action='store_true',
+                   help='Use gated softmax attention with sigmoid or SSS gating')
+    group.add_argument('--sss-gating', action='store_true',
+                   help='Use SSS gating in gated softmax attention (requires --gated-softmax-attention)')
     group.add_argument("--fix-old-xielu", action="store_true",
                        help=("When specified, assumes the checkpoint to be loaded uses the "
                              "old xielu commit and attempts to fixe the weights. Only needs "

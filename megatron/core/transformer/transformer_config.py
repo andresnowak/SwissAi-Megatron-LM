@@ -124,6 +124,12 @@ class TransformerConfig(ModelParallelConfig):
     attention_dropout: float = 0.1
     """Post attention dropout probability."""
 
+    gated_softmax_attention: bool = False
+    """If True, use gated softmax attention with sigmoid or SSS gating."""
+
+    sss_gating: bool = False
+    """If True, use SSS gating in gated softmax attention (requires gated_softmax_attention=True)."""
+
     fp32_residual_connection: bool = False
     """If true, move residual connections to fp32."""
 
@@ -726,6 +732,12 @@ class TransformerConfig(ModelParallelConfig):
             raise ValueError(
                 f"num_query_groups ({self.num_query_groups}) must be a multiple of "
                 f"tensor_model_parallel_size ({self.tensor_model_parallel_size})."
+            )
+
+        if self.sss_gating and not self.gated_softmax_attention:
+            raise ValueError(
+                "sss_gating requires gated_softmax_attention to be enabled. "
+                "Please set --gated-softmax-attention when using --sss-gating."
             )
 
         if self.fp8:

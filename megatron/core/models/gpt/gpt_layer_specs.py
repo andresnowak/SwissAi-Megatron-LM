@@ -6,7 +6,11 @@ from typing import Optional, Union
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 from megatron.core.models.backends import BackendSpecProvider, LocalSpecProvider
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
-from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
+from megatron.core.transformer.attention import (
+    GatedSoftmaxAttention,
+    SelfAttention,
+    SelfAttentionSubmodules,
+)
 from megatron.core.transformer.enums import AttnMaskType, LayerType
 from megatron.core.transformer.identity_op import IdentityOp
 from megatron.core.transformer.mlp import MLP, MLPSubmodules
@@ -80,6 +84,8 @@ def get_gpt_layer_with_transformer_engine_spec(
     use_te_op_fuser: Optional[bool] = False,
     use_kitchen: bool = False,
     use_te_activation_func: bool = False,
+    gated_softmax_attention: Optional[bool] = False,
+    sss_gating: Optional[bool] = False,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -163,11 +169,14 @@ def get_gpt_layer_with_transformer_engine_spec(
         )
     else:
         qk_norm = backend.layer_norm(for_qk=True)
+        # Choose attention module based on gated_softmax_attention flag
+        attention_module = GatedSoftmaxAttention if gated_softmax_attention else SelfAttention
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=attention_module,
                     params={"attn_mask_type": AttnMaskType.causal},
                     submodules=SelfAttentionSubmodules(
                         linear_qkv=backend.column_parallel_layer_norm_linear(),
@@ -207,6 +216,7 @@ def get_gpt_layer_local_spec(
     normalization: Optional[str] = None,
     qk_l2_norm: Optional[bool] = False,
     use_kitchen: bool = False,
+    gated_softmax_attention: Optional[bool] = False,
 ) -> ModuleSpec:
     """Use this spec for an implementation using only modules in Megatron-Core.
 
@@ -278,12 +288,15 @@ def get_gpt_layer_local_spec(
             ),
         )
     else:
+        # Choose attention module based on gated_softmax_attention flag
+        attention_module = GatedSoftmaxAttention if gated_softmax_attention else SelfAttention
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
                 input_layernorm=layer_norm,
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=attention_module,
                     params={"attn_mask_type": AttnMaskType.causal},
                     submodules=SelfAttentionSubmodules(
                         linear_qkv=backend.column_parallel_linear(),
@@ -421,6 +434,8 @@ def get_gpt_decoder_block_spec(
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
             use_te_activation_func=config.use_te_activation_func,
+            gated_softmax_attention=config.gated_softmax_attention,
+            sss_gating=config.sss_gating,
         )
         moe_layer_spec = get_gpt_layer_with_transformer_engine_spec(
             num_experts=config.num_moe_experts,
@@ -431,6 +446,8 @@ def get_gpt_decoder_block_spec(
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
             use_te_activation_func=config.use_te_activation_func,
+            gated_softmax_attention=config.gated_softmax_attention,
+            sss_gating=config.sss_gating,
         )
     else:
         layer_norm_impl = LNImpl
@@ -443,6 +460,7 @@ def get_gpt_decoder_block_spec(
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
+            gated_softmax_attention=config.gated_softmax_attention,
         )
         moe_layer_spec = get_gpt_layer_local_spec(
             num_experts=config.num_moe_experts,
@@ -453,6 +471,7 @@ def get_gpt_decoder_block_spec(
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
+            gated_softmax_attention=config.gated_softmax_attention,
         )
 
     # Parse config.moe_layer_freq to determine the pattern of expert/dense layers.
