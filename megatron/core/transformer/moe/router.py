@@ -284,7 +284,7 @@ class TopKRouter(Router):
             zero_expert_tau=self.config.moe_zero_expert_aux_loss_tau,
         )
         probs = self.attach_and_log_load_balancing_loss(
-            probs, aux_loss_coeff, aux_loss, "ld_balancing_loss", self.tp_cp_group
+            probs, aux_loss_coeff, aux_loss, "load_balancing_loss", self.tp_cp_group
         )
         return probs
 

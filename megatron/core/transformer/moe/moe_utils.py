@@ -809,7 +809,18 @@ def track_moe_metrics(
     if mtp_num_layers is not None:
         num_moe_layers += mtp_num_layers
 
-    aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
+    # Metrics that are counts (not losses) and should not be scaled
+    count_metrics = {'zero_expert_tokens'}
+
+    aux_losses = {}
+    for k, v in tracker.items():
+        if k in count_metrics:
+            # Don't scale count metrics
+            aux_losses[k] = v['values'].float()
+        else:
+            # Scale loss metrics
+            aux_losses[k] = v['values'].float() * loss_scale
+
     for name, loss_list in aux_losses.items():
         if total_loss_dict is not None:
             if name not in total_loss_dict:
@@ -840,64 +851,6 @@ def track_moe_metrics(
                     )
 
     clear_aux_losses_tracker()
-
-
-def track_zero_expert_metrics(
-    iteration: int,
-    writer,
-    wandb_writer=None,
-    total_loss_dict=None,
-    num_layers: Optional[int] = None,
-    moe_layer_freq: Optional[Union[int, List[int]]] = None,
-    mtp_num_layers: Optional[int] = None,
-):
-    """Track zero expert routing metrics for logging.
-
-    Args:
-        iteration: Current training iteration.
-        writer: Tensorboard writer.
-        wandb_writer: Weights & Biases writer.
-        total_loss_dict: Dictionary to accumulate total losses.
-        num_layers: Number of layers in the model.
-        moe_layer_freq: Frequency of MoE layers.
-        mtp_num_layers: Number of MTP layers.
-    """
-    # Get the tracker (same pattern as track_moe_metrics)
-    tracker = get_moe_layer_wise_logging_tracker()
-
-    if 'zero_expert_tokens' not in tracker:
-        return  # No zero expert tracking enabled
-
-    # Reduce across ranks (same as track_moe_metrics does for aux losses)
-    reduce_aux_losses_tracker_across_ranks(['zero_expert_tokens'])
-
-    # Get number of MoE layers (same logic as track_moe_metrics)
-    if moe_layer_freq is None:
-        num_moe_layers = num_layers
-    elif isinstance(moe_layer_freq, int):
-        assert isinstance(num_layers, int)
-        moe_layer_pattern = [1 if (i % moe_layer_freq == 0) else 0 for i in range(num_layers)]
-        num_moe_layers = sum(moe_layer_pattern)
-    elif isinstance(moe_layer_freq, list):
-        num_moe_layers = sum(moe_layer_freq)
-    else:
-        raise ValueError(f"Invalid moe_layer_freq: {moe_layer_freq}")
-
-    if mtp_num_layers is not None:
-        num_moe_layers += mtp_num_layers
-
-    # Get the accumulated zero expert tokens
-    zero_expert_tokens_list = tracker['zero_expert_tokens']['values'].float()
-    avg_zero_expert_tokens = zero_expert_tokens_list.sum() / num_moe_layers
-
-    if total_loss_dict is not None:
-        total_loss_dict['zero_expert_tokens'] = avg_zero_expert_tokens
-
-    if writer is not None:
-        writer.add_scalar('zero_expert_tokens', avg_zero_expert_tokens, iteration)
-
-    if wandb_writer is not None:
-        wandb_writer.log({'zero_expert_tokens': avg_zero_expert_tokens}, iteration)
 
 
 def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate):
