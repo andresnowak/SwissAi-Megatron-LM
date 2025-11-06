@@ -1218,6 +1218,8 @@ def core_transformer_config_from_args(args, config_class=None):
     kw_args['pipeline_dtype'] = args.params_dtype
     kw_args['batch_p2p_comm'] = not args.overlap_p2p_comm
     kw_args['num_moe_experts'] = args.num_experts
+    kw_args['num_moe_zero_experts'] = args.num_moe_zero_experts
+    kw_args['moe_zero_expert_aux_loss_tau'] = args.moe_zero_expert_aux_loss_tau
     kw_args['rotary_interleaved'] = args.rotary_interleaved
     kw_args['num_layers_in_first_pipeline_stage']= args.decoder_first_pipeline_num_layers
     kw_args['num_layers_in_last_pipeline_stage']= args.decoder_last_pipeline_num_layers
@@ -2959,6 +2961,14 @@ def _add_moe_args(parser):
                        help='Degree of expert model parallelism. Default is None, which will be set to the value of --tensor-model-paralle-size.')
     group.add_argument('--num-experts', type=int, default=None,
                        help='Number of Experts in MoE (None means no MoE)')
+    group.add_argument('--num-moe-zero-experts', type=int, default=0,
+                       help='Number of zero experts in MoE layer. Zero experts output zeros for all routed tokens, '
+                       'requiring no memory allocation or computation. They are logically present on all ranks. '
+                       'These are additional experts on top of --num-experts.')
+    group.add_argument('--moe-zero-expert-aux-loss-tau', type=float, default=1.0,
+                       help='Weight coefficient for zero experts in the auxiliary load balancing loss. '
+                       'tau=1.0 treats zero experts equally (default), tau<1.0 penalizes them less (meaning they will be choosen more times than FFN experts), '
+                       'tau=0.0 excludes them from load balancing loss entirely.')
     group.add_argument('--moe-layer-freq', type=moe_freq_type, default=1,
                        help='Frequency between MoE layers and Dense layers. Accepts either: '
                             '- An integer N: Represents a 1:N ratio, meaning one expert layer for every N-1 dense layers '

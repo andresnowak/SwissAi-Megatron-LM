@@ -159,6 +159,15 @@ class TransformerConfig(ModelParallelConfig):
     """Number of experts to use for MoE layer. When set, it replaces MLP with MoE layer. Set to None
     for no MoE."""
 
+    num_moe_zero_experts: int = 0
+    """Number of zero experts in MoE layer. Zero experts output zeros for all routed tokens,
+    requiring no memory allocation or computation. They are logically present on all ranks."""
+
+    moe_zero_expert_aux_loss_tau: float = 1.0
+    """Weight coefficient for zero experts in the auxiliary load balancing loss.
+    tau=1.0 treats zero experts equally (default), tau<1.0 penalizes them less,
+    tau=0.0 excludes them from load balancing loss entirely."""
+
     rotary_interleaved: bool = False
     """True is rotate pairs of even and odd dimensions (RoFormer style), False is rotate pairs of
     first half and second half (LLaMa style). Default to False."""

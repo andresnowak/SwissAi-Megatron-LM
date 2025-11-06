@@ -87,7 +87,7 @@ from megatron.training.utils import get_batch_on_this_cp_rank, get_batch_on_this
 from megatron.legacy.data.data_samplers import build_pretraining_data_loader
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.transformer.moe import upcycling_utils
-from megatron.core.transformer.moe.moe_utils import track_moe_metrics
+from megatron.core.transformer.moe.moe_utils import track_moe_metrics, track_zero_expert_metrics
 from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 from megatron.core.parallel_state import destroy_global_memory_buffer, destroy_model_parallel
 from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -1539,6 +1539,17 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
             moe_layer_freq=args.moe_layer_freq,
             mtp_num_layers=args.mtp_num_layers,
         )
+        # Track zero expert routing metrics if enabled
+        if args.num_moe_zero_experts is not None and args.num_moe_zero_experts > 0:
+            track_zero_expert_metrics(
+                iteration=iteration,
+                writer=writer,
+                wandb_writer=wandb_writer,
+                total_loss_dict=total_loss_dict,
+                num_layers=args.num_layers,
+                moe_layer_freq=args.moe_layer_freq,
+                mtp_num_layers=args.mtp_num_layers,
+            )
     if args.mtp_num_layers is not None:
         mtp_loss_scale = 1 / get_num_microbatches()
         MTPLossLoggingHelper.track_mtp_metrics(

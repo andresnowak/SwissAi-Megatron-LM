@@ -39,6 +39,9 @@ class Router(ABC, MegatronModule):
         super().__init__(config)
         self.config = config
         self.num_experts = self.config.num_moe_experts
+        self.num_zero_experts = self.config.num_moe_zero_experts
+        # Total experts from router's perspective (FFN experts + zero experts)
+        self.total_num_experts = self.num_experts + self.num_zero_experts
         self.moe_aux_loss_func = None
         self.layer_number = None
         self.tp_group = pg_collection.tp
@@ -46,10 +49,13 @@ class Router(ABC, MegatronModule):
         self.tp_cp_group = pg_collection.tp_cp
         self.tp_dp_cp_group = pg_collection.tp_dp_cp
 
-        # Initialize the gate weights.
+        # Initialize the gate weights including zero experts.
+        # Zero experts are additional rows that can participate in routing.
         # TODO: Add support for GPU initialization, which requires updating the golden values.
         self.weight = torch.nn.Parameter(
-            torch.empty((self.config.num_moe_experts, self.config.hidden_size), dtype=torch.float32)
+            torch.empty(
+                (self.total_num_experts, self.config.hidden_size), dtype=torch.float32
+            )
         )
         # If calculate per token loss, we need to scale up moe aux loss by the number of tokens.
         # So we need to know if the model is configured to calculate per token loss.
@@ -148,7 +154,7 @@ class TopKRouter(Router):
             self.register_buffer(
                 'local_tokens_per_expert',
                 torch.zeros(
-                    self.config.num_moe_experts,
+                    self.total_num_experts,  # Include zero experts in tracking
                     dtype=torch.float32,
                     device=torch.cuda.current_device(),
                 ),
@@ -157,7 +163,7 @@ class TopKRouter(Router):
             self.register_buffer(
                 'expert_bias',
                 torch.zeros(
-                    self.config.num_moe_experts,
+                    self.total_num_experts,  # Include zero experts in bias
                     dtype=torch.float32,
                     device=torch.cuda.current_device(),
                 ),
@@ -171,7 +177,7 @@ class TopKRouter(Router):
             self.register_buffer(
                 'global_tokens_per_expert',
                 torch.zeros(
-                    self.config.num_moe_experts,
+                    self.total_num_experts,  # Include zero experts in global tracking
                     dtype=torch.float32,
                     device=torch.cuda.current_device(),
                 ),
@@ -274,9 +280,11 @@ class TopKRouter(Router):
             num_experts=self.config.num_moe_experts,
             moe_aux_loss_coeff=aux_loss_coeff,
             fused=self.config.moe_router_fusion,
+            num_zero_experts=self.num_zero_experts,
+            zero_expert_tau=self.config.moe_zero_expert_aux_loss_tau,
         )
         probs = self.attach_and_log_load_balancing_loss(
-            probs, aux_loss_coeff, aux_loss, "load_balancing_loss", self.tp_cp_group
+            probs, aux_loss_coeff, aux_loss, "ld_balancing_loss", self.tp_cp_group
         )
         return probs
 
@@ -316,6 +324,8 @@ class TopKRouter(Router):
                 num_experts=self.config.num_moe_experts,
                 moe_aux_loss_coeff=seq_aux_loss_coeff,
                 fused=self.config.moe_router_fusion,
+                num_zero_experts=self.num_zero_experts,
+                zero_expert_tau=self.config.moe_zero_expert_aux_loss_tau,
             )
             / bsz
         )
@@ -352,6 +362,8 @@ class TopKRouter(Router):
             num_experts=self.config.num_moe_experts,
             moe_aux_loss_coeff=global_aux_loss_coeff,
             fused=self.config.moe_router_fusion,
+            num_zero_experts=self.num_zero_experts,
+            zero_expert_tau=self.config.moe_zero_expert_aux_loss_tau,
         )
         probs = self.attach_and_log_load_balancing_loss(
             probs,
@@ -466,7 +478,7 @@ class TopKRouter(Router):
                 with shape [num_tokens, num_experts].
         """
         seq_length, bsz = logits.shape[:2]
-        logits = logits.view(-1, self.config.num_moe_experts)
+        logits = logits.view(-1, self.total_num_experts)
 
         # Apply Z-Loss
         logits = self.apply_z_loss(logits)
@@ -518,6 +530,33 @@ class TopKRouter(Router):
             with torch.no_grad():
                 self.local_tokens_per_expert += routing_map.sum(dim=0)
 
+        # Track tokens routed to zero experts before masking them out
+        # Save to tracker for logging (no communication here - happens in track_zero_expert_metrics)
+        if self.num_zero_experts > 0 and self.training and torch.is_grad_enabled():
+            with torch.no_grad():
+                # Total tokens routed to all zero experts in this batch
+                total_zero_expert_tokens = routing_map[:, self.num_experts:].sum()
+
+                # Get number of layers for tracker
+                num_layers = self.config.num_layers
+                if self.config.mtp_num_layers is not None:
+                    num_layers += self.config.mtp_num_layers
+
+                # Save to the global tracker (same pattern as aux losses)
+                save_to_aux_losses_tracker(
+                    "zero_expert_tokens",
+                    total_zero_expert_tokens,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+
+        # Remove zero expert columns - they don't participate in expert computation
+        # The aux loss already captured their contribution, and they produce no gradient (and they complicate the permuting becuase they are extra experts)
+        if self.num_zero_experts > 0:
+            routing_map = routing_map[:, :self.num_experts].contiguous()
+            probs = probs[:, :self.num_experts].contiguous()
+        
         return probs, routing_map
 
     def reset_global_aux_loss_tracker(self):

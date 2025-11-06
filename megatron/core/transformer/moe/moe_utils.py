@@ -40,6 +40,8 @@ def switch_load_balancing_loss_func(
     num_experts: int,
     moe_aux_loss_coeff: float,
     fused: bool = False,
+    num_zero_experts: int = 0,
+    zero_expert_tau: float = 1.0,
 ):
     """Calculate the auxiliary loss for load balancing.
     Refer to the Switch Transformer (https://arxiv.org/abs/2101.03961)
@@ -83,16 +85,29 @@ def switch_load_balancing_loss_func(
 
     Args:
         probs (torch.Tensor): Softmax probabilities output by the router for each token.
-                              Shape in [num_tokens, num_experts].
+                              Shape in [num_tokens, num_experts + num_zero_experts].
         tokens_per_expert (torch.Tensor): Number of tokens assigned to each expert in the batch.
-                                          Shape in [num_experts]
+                                          Shape in [num_experts + num_zero_experts]
         total_num_tokens (int): Total number of tokens in the batch.
         topk (int): The number of experts selected for each token.
-        num_experts (int): The number of experts.
+        num_experts (int): The number of FFN experts (excluding zero experts).
         moe_aux_loss_coeff (float): The coefficient for the auxiliary loss.
+        fused (bool): Whether to use fused implementation.
+        num_zero_experts (int): Number of zero experts.
+        zero_expert_tau (float): Weight coefficient for zero experts in loss calculation.
+                                 tau=1.0 treats equally, tau<1.0 penalizes less, tau=0.0 excludes.
     Returns:
         torch.Tensor: The auxiliary loss for load balancing.
     """
+     # Apply tau weighting to zero experts in tokens_per_expert (the f_i term)
+    # This scales the contribution of zero experts in the loss: Σ(tau * f_i * P_i) for zero experts
+    if num_zero_experts > 0 and zero_expert_tau != 1.0:
+        zero_expert_tau_mask = torch.ones(
+            tokens_per_expert.shape[0], device=tokens_per_expert.device, dtype=tokens_per_expert.dtype
+        )
+        zero_expert_tau_mask[num_experts:] = zero_expert_tau
+        tokens_per_expert = tokens_per_expert * zero_expert_tau_mask
+
     if fused:
         if not HAVE_TE or fused_moe_aux_loss is None:
             raise ValueError("fused_moe_aux_loss is not available. Please install TE >= 2.7.0.")
@@ -825,6 +840,64 @@ def track_moe_metrics(
                     )
 
     clear_aux_losses_tracker()
+
+
+def track_zero_expert_metrics(
+    iteration: int,
+    writer,
+    wandb_writer=None,
+    total_loss_dict=None,
+    num_layers: Optional[int] = None,
+    moe_layer_freq: Optional[Union[int, List[int]]] = None,
+    mtp_num_layers: Optional[int] = None,
+):
+    """Track zero expert routing metrics for logging.
+
+    Args:
+        iteration: Current training iteration.
+        writer: Tensorboard writer.
+        wandb_writer: Weights & Biases writer.
+        total_loss_dict: Dictionary to accumulate total losses.
+        num_layers: Number of layers in the model.
+        moe_layer_freq: Frequency of MoE layers.
+        mtp_num_layers: Number of MTP layers.
+    """
+    # Get the tracker (same pattern as track_moe_metrics)
+    tracker = get_moe_layer_wise_logging_tracker()
+
+    if 'zero_expert_tokens' not in tracker:
+        return  # No zero expert tracking enabled
+
+    # Reduce across ranks (same as track_moe_metrics does for aux losses)
+    reduce_aux_losses_tracker_across_ranks(['zero_expert_tokens'])
+
+    # Get number of MoE layers (same logic as track_moe_metrics)
+    if moe_layer_freq is None:
+        num_moe_layers = num_layers
+    elif isinstance(moe_layer_freq, int):
+        assert isinstance(num_layers, int)
+        moe_layer_pattern = [1 if (i % moe_layer_freq == 0) else 0 for i in range(num_layers)]
+        num_moe_layers = sum(moe_layer_pattern)
+    elif isinstance(moe_layer_freq, list):
+        num_moe_layers = sum(moe_layer_freq)
+    else:
+        raise ValueError(f"Invalid moe_layer_freq: {moe_layer_freq}")
+
+    if mtp_num_layers is not None:
+        num_moe_layers += mtp_num_layers
+
+    # Get the accumulated zero expert tokens
+    zero_expert_tokens_list = tracker['zero_expert_tokens']['values'].float()
+    avg_zero_expert_tokens = zero_expert_tokens_list.sum() / num_moe_layers
+
+    if total_loss_dict is not None:
+        total_loss_dict['zero_expert_tokens'] = avg_zero_expert_tokens
+
+    if writer is not None:
+        writer.add_scalar('zero_expert_tokens', avg_zero_expert_tokens, iteration)
+
+    if wandb_writer is not None:
+        wandb_writer.log({'zero_expert_tokens': avg_zero_expert_tokens}, iteration)
 
 
 def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate):

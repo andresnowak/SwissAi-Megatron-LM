@@ -366,7 +366,12 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
         super().__init__(config=config, pg_collection=pg_collection)
         self.num_local_experts = num_local_experts
         assert config.num_moe_experts is not None
+        # num_experts is FFN experts only (distributed across EP ranks)
         self.num_experts = config.num_moe_experts
+        # Zero experts are additional experts on top of FFN experts, present on all ranks
+        self.num_zero_experts = config.num_moe_zero_experts
+        # Total experts from router's perspective
+        self.total_num_experts = self.num_experts + self.num_zero_experts
         assert self.num_local_experts > 0, "Expected at least one expert"
         self.local_expert_indices = local_expert_indices
         assert (
@@ -467,19 +472,35 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             )
             return num_tokens_per_local_expert
 
-        # [num_experts], number of tokens assigned to each expert from the current rank's input.
+        # [num_experts + num_zero_experts], number of tokens assigned to each expert
+        # from the current rank's input.
         num_local_tokens_per_expert = routing_map.sum(dim=0).long()
+
+        # Separate FFN experts from zero experts
+        # Zero experts are at indices [num_experts, num_experts + num_zero_experts)
+        # if self.num_zero_experts > 0:
+        #     num_local_tokens_per_ffn_expert = num_local_tokens_per_expert[: self.num_experts]
+        #     num_local_tokens_per_zero_expert = num_local_tokens_per_expert[self.num_experts :]
+        # else:
+        #     num_local_tokens_per_ffn_expert = num_local_tokens_per_expert
+        #     num_local_tokens_per_zero_expert = None
+
+        # # Use FFN expert tokens for all-to-all sizing and grouped GEMM
+        # # Zero expert tokens are handled locally (or skipped entirely)
+        # num_local_tokens_per_expert = num_local_tokens_per_ffn_expert
 
         if (
             self.config.moe_expert_capacity_factor is not None
             or self.config.moe_router_padding_for_fp8
+            or self.num_zero_experts > 0
         ):
-            # When using token dropping or router padding, output size is dynamic.
+            # When using token dropping, router padding, or zero experts, output size is dynamic.
             # Need to sync output size GPU->CPU before allocating output buffer
+            # For zero experts: tokens routed to zero experts don't go through grouped GEMM
             self.num_out_tokens = num_local_tokens_per_expert.sum()
             self._maybe_update_cuda_sync_point("before_permutation_1")
         else:
-            # For dropless training, output size is static (num_tokens * topk)
+            # For dropless training without zero experts, output size is static (num_tokens * topk)
             # No explicit sync needed
             self.num_out_tokens = routing_map.size(0) * self.config.moe_router_topk
         if self.ep_size > 1 or self.tp_size > 1:
@@ -590,6 +611,7 @@ class MoEAlltoAllTokenDispatcher(MoETokenDispatcher):
             "before_permutation_1", self.tokens_per_expert
         )
         self.hidden_shape_before_permute = hidden_states.shape
+
         (
             permutated_local_input_tokens,
             permuted_probs,
