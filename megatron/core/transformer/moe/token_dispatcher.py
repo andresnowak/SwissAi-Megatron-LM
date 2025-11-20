@@ -216,6 +216,9 @@ class MoEAllGatherTokenDispatcher(MoETokenDispatcher):
             pg_collection (ProcessGroupCollection, optional): Process groups for MoE operations.
         """
         super().__init__(config=config, pg_collection=pg_collection)
+        assert (
+            config.num_moe_zero_experts == 0
+        ), "Zero experts are not supported in AllGather dispatcher. Use AlltoAll dispatcher instead."
         self.num_local_experts = num_local_experts
         assert self.num_local_experts > 0, "Expected at least one expert"
         self.local_expert_indices = local_expert_indices
@@ -1180,6 +1183,9 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
             pg_collection (ProcessGroupCollection, optional): Process groups for MoE operations.
         """
         super().__init__(config=config, pg_collection=pg_collection)
+        assert (
+            config.num_moe_zero_experts == 0
+        ), "Zero experts are not supported in Flex dispatcher. Use AlltoAll dispatcher instead."
 
         self.num_local_experts = num_local_experts
         self.local_expert_indices = local_expert_indices

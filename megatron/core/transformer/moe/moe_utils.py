@@ -733,8 +733,38 @@ def save_to_aux_losses_tracker(
     tracker[name]["avg_group"] = avg_group
 
 
+def save_to_zero_expert_tracker(
+    name: str,
+    count: torch.Tensor,
+    layer_number: int,
+    num_layers: int,
+    reduce_group: torch.distributed.ProcessGroup = None,
+    avg_group: torch.distributed.ProcessGroup = None,
+):
+    """Save the zero expert token count for logging.
+    Args:
+        name (str): The name of the metric.
+        count (torch.Tensor): Amount of tokens that chose a zero expert in the layer.
+        layer_number (int): Layer index of the loss.
+        num_layers (int): The number of total layers.
+        reduce_group (torch.distributed.ProcessGroup): The group for reducing the count.
+        avg_group (torch.distributed.ProcessGroup): The group for averaging the count.
+    """
+    # Skip logging if layer_number is None.
+    if layer_number is None:
+        return
+
+    tracker = get_moe_layer_wise_logging_tracker()
+    if name not in tracker:
+        tracker[name] = {}
+        tracker[name]["values"] = torch.zeros(num_layers, device=count.device)
+    tracker[name]["values"][layer_number - 1] += count
+    tracker[name]["reduce_group"] = reduce_group
+    tracker[name]["avg_group"] = avg_group
+
+
 def clear_aux_losses_tracker():
-    """Clear the auxiliary losses."""
+    """Clear the MoE layer-wise logging tracker (aux losses and other metrics)."""
     tracker = get_moe_layer_wise_logging_tracker()
     for name in tracker:
         tracker[name]["values"].zero_()
@@ -810,42 +840,43 @@ def track_moe_metrics(
         num_moe_layers += mtp_num_layers
 
     # Metrics that are counts (not losses) and should not be scaled
-    count_metrics = {'zero_expert_tokens'}
+    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts'}
 
-    aux_losses = {}
+    # Collect all MoE metrics (both aux losses and count metrics)
+    moe_metrics = {}
     for k, v in tracker.items():
         if k in count_metrics:
             # Don't scale count metrics
-            aux_losses[k] = v['values'].float()
+            moe_metrics[k] = v['values'].float()
         else:
             # Scale loss metrics
-            aux_losses[k] = v['values'].float() * loss_scale
+            moe_metrics[k] = v['values'].float() * loss_scale
 
-    for name, loss_list in aux_losses.items():
+    for name, values_list in moe_metrics.items():
         if total_loss_dict is not None:
             if name not in total_loss_dict:
-                total_loss_dict[name] = loss_list.sum() / num_moe_layers
+                total_loss_dict[name] = values_list.sum() / num_moe_layers
             else:
-                total_loss_dict[name] += loss_list.sum() / num_moe_layers
+                total_loss_dict[name] += values_list.sum() / num_moe_layers
         if writer is not None:
             # currently when using add_scalars,
             # torch.utils.add_scalars makes each timer its own run, which
             # polutes the runs list, so we just add each as a scalar
-            writer.add_scalar(name, loss_list.sum() / num_moe_layers, iteration)
+            writer.add_scalar(name, values_list.sum() / num_moe_layers, iteration)
             if per_layer_logging:
-                for i, loss in enumerate(loss_list.tolist()):
-                    writer.add_scalar(f"moe/{name}_layer_{i}", loss, iteration)
+                for i, value in enumerate(values_list.tolist()):
+                    writer.add_scalar(f"moe/{name}_layer_{i}", value, iteration)
 
             # W&B logging lacks support for logging multiple scalars simultaneously.
             # As a workaround, we log each scalar individually first, then we can create
             # a custom panel to manually group them to a single plot.
             if wandb_writer:
-                wandb_writer.log({f"{name}": loss_list.sum() / num_moe_layers}, iteration)
+                wandb_writer.log({f"{name}": values_list.sum() / num_moe_layers}, iteration)
                 if per_layer_logging:
                     wandb_writer.log(
                         {
-                            f"moe/{name}_layer_{i}": loss
-                            for i, loss in enumerate(loss_list.tolist())
+                            f"moe/{name}_layer_{i}": value
+                            for i, value in enumerate(values_list.tolist())
                         },
                         iteration,
                     )

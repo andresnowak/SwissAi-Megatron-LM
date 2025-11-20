@@ -536,16 +536,25 @@ class TopKRouter(Router):
             with torch.no_grad():
                 # Total tokens routed to all zero experts in this batch
                 total_zero_expert_tokens = routing_map[:, self.num_experts:].sum()
+                # Tokens that chose only zero experts (no FFN experts)
+                total_tokens_with_only_zero_experts = (routing_map[:, :self.num_experts].sum(dim=1) == 0).sum()
 
                 # Get number of layers for tracker
                 num_layers = self.config.num_layers
                 if self.config.mtp_num_layers is not None:
                     num_layers += self.config.mtp_num_layers
 
-                # Save to the global tracker (same pattern as aux losses)
-                save_to_aux_losses_tracker(
+                # Save to the global tracker
+                save_to_zero_expert_tracker(
                     "zero_expert_tokens",
                     total_zero_expert_tokens,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+                save_to_zero_expert_tracker(
+                    "tokens_with_only_zero_experts",
+                    total_tokens_with_only_zero_experts,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
@@ -554,6 +563,7 @@ class TopKRouter(Router):
         # Remove zero expert columns - they don't participate in expert computation
         # The aux loss already captured their contribution, and they produce no gradient (and they complicate the permuting becuase they are extra experts)
         if self.num_zero_experts > 0:
+            # NOTE: doing this uses more memory (we do a copy of size num_ffn_epxerts * num_tokens (including batch))
             routing_map = routing_map[:, :self.num_experts].contiguous()
             probs = probs[:, :self.num_experts].contiguous()
         
