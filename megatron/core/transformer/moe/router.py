@@ -15,6 +15,7 @@ from megatron.core.transformer.moe.moe_utils import (
     compute_routing_scores_for_aux_loss,
     router_gating_linear,
     save_to_aux_losses_tracker,
+    save_to_zero_expert_tracker,
     sinkhorn,
     switch_load_balancing_loss_func,
     topk_routing_with_score_function,
