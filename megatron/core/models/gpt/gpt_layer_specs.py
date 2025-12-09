@@ -80,6 +80,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     use_te_op_fuser: Optional[bool] = False,
     use_kitchen: bool = False,
     use_te_activation_func: bool = False,
+    differential_transformer: bool = False,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -178,6 +179,9 @@ def get_gpt_layer_with_transformer_engine_spec(
                         ),
                         k_layernorm=(
                             L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                        subln=(
+                            IdentityOp if not differential_transformer else qk_norm
                         ),
                     ),
                 ),

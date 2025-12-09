@@ -1169,6 +1169,23 @@ def validate_args(args, defaults={}):
         assert args.goldfish_k > 0, f"goldfish_k (frequency) must be a positive integer. ({args.goldfish_k})"
         assert args.goldfish_h > 0, f"goldfish_h (context width) must be a positive integer. ({args.goldfish_h})"
 
+    # Differential attention halves the effective head dimension for RoPE. If the
+    # user left rotary_percent at its default, pick 0.5 automatically to match the
+    # reference implementation; otherwise keep their choice but warn.
+    if args.differential_attention:
+        if args.rotary_percent == 1.0:
+            args.rotary_percent = 0.5
+            warn_rank_0(
+                "Enabling differential attention: setting rotary_percent to 0.5 to match halved head dimension. "
+                "Override with --rotary-percent to use a custom value.",
+                args.rank,
+            )
+        elif args.rotary_percent != 0.5:
+            warn_rank_0(
+                f"Differential attention typically uses rotary_percent=0.5; using user-specified {args.rotary_percent}.",
+                args.rank,
+            )
+
     # Print arguments.
     _print_args("arguments", args)
 
@@ -1588,6 +1605,8 @@ def _add_network_size_args(parser):
                        help='An extension of squared relu to handle negative values')
     group.add_argument('--xssslur2', action='store_true',
                        help='A more efficient xIELU')
+    group.add_argument('--differential-attention', action='store_true',
+                       help='Applies differential attention')
     group.add_argument('--swiglu', action='store_true',
                        help='Use gated linear units and SiLU activation instead of default gelu')
     group.add_argument('--onnx-safe', type=bool, required=False,

@@ -164,7 +164,10 @@ class SeeDNorm(torch.nn.Module):
         setattr(self.alpha, "sequence_parallel", sequence_parallel)
         setattr(self.alpha, "apply_weight_decay", True)
         setattr(self.beta, "sequence_parallel", sequence_parallel)
-        setattr(self.beta, "apply_weight_decay", True)
+        if activation == "tanh":
+            setattr(self.beta, "apply_weight_decay", True)
+        else:
+            setattr(self.beta, "skip_weight_decay", True)
         setattr(self.gamma, "sequence_parallel", sequence_parallel)
 
     @jit_fuser

@@ -4,7 +4,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import NoReturn, Optional, Tuple, Union
 
+import math
 import torch
+import torch.nn as nn
 from torch import Tensor
 
 from megatron.core import tensor_parallel
@@ -95,6 +97,7 @@ class SelfAttentionSubmodules:
     linear_proj: Union[ModuleSpec, type] = None
     q_layernorm: Union[ModuleSpec, type] = None
     k_layernorm: Union[ModuleSpec, type] = None
+    subln: Union[ModuleSpec, type] = None
 
 
 @dataclass
@@ -204,6 +207,29 @@ class Attention(MegatronModule, ABC):
             # linear_proj to save the original input tensors to avoid the extra memory usage of
             # the quantized tensor.
             set_save_original_input(self.linear_proj)
+
+        self.head_dim = self.hidden_size_per_attention_head // 2
+        if self.config.differential_attention:
+            lambda_init = 0.8 - 0.6 * math.exp(-0.3 * self.layer_number)
+            self.lambda_q1 = nn.Parameter(
+                torch.zeros(self.head_dim, dtype=torch.float32).normal_(0, 0.1)
+            )
+            self.lambda_k1 = nn.Parameter(
+                torch.zeros(self.head_dim, dtype=torch.float32).normal_(0, 0.1)
+            )
+            self.lambda_q2 = nn.Parameter(
+                torch.zeros(self.head_dim, dtype=torch.float32).normal_(0, 0.1)
+            )
+            self.lambda_k2 = nn.Parameter(
+                torch.zeros(self.head_dim, dtype=torch.float32).normal_(0, 0.1)
+            )
+            self.lambda_init = lambda_init
+            self.subln = build_module(
+                submodules.subln,                 # or any key you prefer
+                hidden_size=2 * self.head_dim,
+                config=self.config,
+                eps=self.config.layernorm_epsilon,
+            )
 
     def _checkpointed_attention_forward(
         self,
@@ -785,48 +811,85 @@ class Attention(MegatronModule, ABC):
         # core attention computation
         # ==================================
 
-        nvtx_range_push(suffix="core_attention")
-        if self.checkpoint_core_attention and self.training:
-            core_attn_out = self._checkpointed_attention_forward(
-                query,
-                key,
-                value,
-                attention_mask,
-                attn_mask_type=attn_mask_type,
-                attention_bias=attention_bias,
-                packed_seq_params=packed_seq_params,
-            )
+        nvtx_range_push("core_attention")
+        if self.config.differential_attention:
+            # split heads and channels
+            q1, q2 = torch.chunk(query, 2, dim=-1)  # [s,b,np,hn//2]
+            k1, k2 = torch.chunk(key,   2, dim=-1)
+            v1, v2 = torch.chunk(value, 2, dim=-1)
+
+            softmax_scale = 1.0 / math.sqrt(k1.size(-1))
+
+            def _flash(q_, k_, v_):
+                if packed_seq_params is not None:
+                    cu_query_lengths, max_seqlen_q = inference_context.cu_query_lengths()
+                    cu_kv_lengths, kv_lengths, max_seqlen_k = inference_context.cu_kv_lengths()
+                    return self.flash_decode_and_prefill(
+                        q_, k_, v_, max_seqlen_q, max_seqlen_k,
+                        cu_query_lengths, cu_kv_lengths, kv_lengths, block_table
+                    )
+                if inference_context is not None and inference_context.is_decode_only():
+                    inference_key_memory, inference_value_memory = \
+                        inference_context.key_value_memory_dict[self.layer_number]
+                    output = self.flash_decode(
+                        sequence_len_offset, q_, k_, v_,
+                        inference_key_memory, inference_value_memory,
+                        rotary_pos_cos, rotary_pos_sin,
+                        rotary_interleaved=self.config.rotary_interleaved
+                    )
+                    return output.transpose(0, 1).contiguous()
+                from flash_attn import flash_attn_func
+                out = flash_attn_func(
+                    q_.permute(1, 0, 2, 3),
+                    k_.permute(1, 0, 2, 3),
+                    v_.permute(1, 0, 2, 3),
+                    causal=(attn_mask_type == AttnMaskType.causal),
+                    softmax_scale=softmax_scale
+                )
+                return out.permute(1, 0, 2, 3)
+
+            out11 = _flash(q1, k1, v1)
+            out12 = _flash(q1, k1, v2)
+            out21 = _flash(q2, k2, v1)
+            out22 = _flash(q2, k2, v2)
+            
+            out1 = torch.cat([out11, out12], dim=-1)
+            out2 = torch.cat([out21, out22], dim=-1)
+            
+            lambda_1 = torch.exp((self.lambda_q1 * self.lambda_k1).sum(-1).float()).type_as(out1)
+            lambda_2 = torch.exp((self.lambda_q2 * self.lambda_k2).sum(-1).float()).type_as(out1)
+            lambda_full = lambda_1 - lambda_2 + self.lambda_init
+            
+            core_attn_out = out1 - lambda_full * out2
+            core_attn_out = self.subln(core_attn_out)
+            core_attn_out = core_attn_out * (1. - self.lambda_init)
+            core_attn_out = core_attn_out.reshape(core_attn_out.size(0),
+                                                  core_attn_out.size(1), -1)
         else:
-            if inference_context is None or inference_context.is_static_batching():
-                # Static batching attention kernel.
-                core_attn_out = self.core_attention(
-                    query,
-                    key,
-                    value,
-                    attention_mask,
+            # ----- original Megatron paths (unchanged) -----------------------------
+            if self.checkpoint_core_attention and self.training:
+                core_attn_out = self._checkpointed_attention_forward(
+                    query, key, value, attention_mask,
                     attn_mask_type=attn_mask_type,
                     attention_bias=attention_bias,
                     packed_seq_params=packed_seq_params,
                 )
-
             else:
-                # Dynamic batching attention kernel.
-                q, k, v = (query, key, value)
-                cu_query_lengths, max_seqlen_q = inference_context.cu_query_lengths()
-                cu_kv_lengths, kv_lengths, max_seqlen_k = inference_context.cu_kv_lengths()
-
-                core_attn_out = self.flash_decode_and_prefill(
-                    q,
-                    k,
-                    v,
-                    max_seqlen_q,
-                    max_seqlen_k,
-                    cu_query_lengths,
-                    cu_kv_lengths,
-                    kv_lengths,
-                    block_table,
-                )
-                core_attn_out = rearrange(core_attn_out, 's b h d -> s b (h d)')
+                if inference_context is None or inference_context.is_static_batching():
+                    core_attn_out = self.core_attention(
+                        query, key, value, attention_mask,
+                        attn_mask_type=attn_mask_type,
+                        attention_bias=attention_bias,
+                        packed_seq_params=packed_seq_params,
+                    )
+                else:
+                    q, k, v = (query, key, value)
+                    cu_query_lengths, max_seqlen_q = inference_context.cu_query_lengths()
+                    cu_kv_lengths, kv_lengths, max_seqlen_k = inference_context.cu_kv_lengths()
+                    core_attn_out = self.flash_decode_and_prefill(
+                        q, k, v, max_seqlen_q, max_seqlen_k,
+                        cu_query_lengths, cu_kv_lengths, kv_lengths, block_table)
+                    core_attn_out = rearrange(core_attn_out, 's b h d -> s b (h d)')
 
         if packed_seq_params is not None and packed_seq_params.qkv_format == 'thd':
             # reshape to same output shape as unpacked case
@@ -935,6 +998,8 @@ class SelfAttention(Attention):
                 self.q_layernorm.bias.data,
                 self.k_layernorm.weight.data,
                 self.k_layernorm.bias.data,
+                self.subln.weight.data,
+                self.subln.bias.data,
             ]
         )
         dp_list = [torch.empty_like(inputs) for _ in range(get_data_parallel_world_size())]
@@ -958,6 +1023,8 @@ class SelfAttention(Attention):
                     self.q_layernorm.bias.data,
                     self.k_layernorm.weight.data,
                     self.k_layernorm.bias.data,
+                    self.subln.weight.data,
+                    self.subln.bias.data,
                 ],
                 ["q_w", "q_b", "k_w", "k_b"],
                 "DP",
@@ -977,6 +1044,8 @@ class SelfAttention(Attention):
                     self.q_layernorm.bias.data,
                     self.k_layernorm.weight.data,
                     self.k_layernorm.bias.data,
+                    self.subln.weight.data,
+                    self.subln.bias.data,
                 ],
                 ["q_w", "q_b", "k_w", "k_b"],
                 "TP",

@@ -64,6 +64,12 @@ def test_seednorm_weight_decay_flags():
     assert getattr(module.beta, "apply_weight_decay")
     assert not hasattr(module.gamma, "apply_weight_decay")
 
+    module = SeeDNorm(hidden_size=3, activation="softsign")
+    assert getattr(module.alpha, "apply_weight_decay")
+    assert hasattr(module.beta, "skip_weight_decay")
+    assert not hasattr(module.beta, "apply_weight_decay")
+    assert not hasattr(module.gamma, "apply_weight_decay")
+
 def test_seednorm_supports_zero_centered_gamma():
     torch.manual_seed(2)
     hidden_size = 6

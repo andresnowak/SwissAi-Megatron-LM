@@ -682,6 +682,9 @@ class TransformerConfig(ModelParallelConfig):
     hetereogenous_dist_checkpoint: bool = False
     """Whether to use heterogenous layers in distributed checkpoint."""
 
+    differential_attention: bool = False
+    """Whether to use differential attention."""
+
     ####################
     # Quantization
     ####################
