@@ -120,9 +120,10 @@ def switch_load_balancing_loss_func(
             coeff=moe_aux_loss_coeff,
         )
 
+    total_experts = num_experts + num_zero_experts
     aggregated_probs_per_expert = probs.sum(dim=0)
     aux_loss = torch.sum(aggregated_probs_per_expert * tokens_per_expert) * (
-        num_experts * moe_aux_loss_coeff / (topk * total_num_tokens * total_num_tokens)
+        total_experts * moe_aux_loss_coeff / (topk * total_num_tokens * total_num_tokens)
     )
     return aux_loss
 

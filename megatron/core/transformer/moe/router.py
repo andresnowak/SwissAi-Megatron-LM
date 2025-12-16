@@ -350,7 +350,7 @@ class TopKRouter(Router):
 
         self.global_tokens_per_expert += tokens_per_expert
         self.ga_steps += 1
-        averated_tokens_per_expert = self.global_tokens_per_expert / self.ga_steps
+        averated_tokens_per_expert = self.global_tokens_per_expert / self.ga_steps # average tokens per expert over all steps
 
         num_tokens = scores_for_aux_loss.shape[0]
         total_num_tokens = num_tokens * self.tp_dp_cp_group.size()
@@ -502,6 +502,7 @@ class TopKRouter(Router):
 
         # Apply token dropping to probs and routing_map.
         if self.config.moe_expert_capacity_factor is not None:
+            assert self.config.num_moe_zero_experts == 0, "Token dropping with zero experts is not supported yet."
             probs, routing_map = apply_router_token_dropping(
                 probs,
                 routing_map,
