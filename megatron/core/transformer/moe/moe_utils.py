@@ -704,52 +704,72 @@ def apply_router_token_dropping(
     return final_probs, final_map
 
 
-def save_to_aux_losses_tracker(
-    name: str,
-    loss: torch.Tensor,
-    layer_number: int,
-    num_layers: int,
-    reduce_group: torch.distributed.ProcessGroup = None,
-    avg_group: torch.distributed.ProcessGroup = None,
+def expert_max_violation_batchwise(
+    routing_map: torch.Tensor,
+    num_experts: int,
+    total_num_tokens: int,
 ):
-    """Save the auxiliary loss for logging.
+    """Compute the maximum expert violation in the batch (only among FFN experts).
+
     Args:
-        name (str): The name of the loss.
-        loss (torch.Tensor): The loss tensor.
-        layer_number (int): Layer index of the loss.
-        num_layers (int): The number of total layers.
-        reduce_group (torch.distributed.ProcessGroup): The group for reducing the loss.
-        mean_group (torch.distributed.ProcessGroup): The group for averaging the loss.
+        routing_map (torch.Tensor): Boolean tensor of shape [num_tokens, num_experts + num_zero_experts]
+            indicating which experts were selected for each token.
+        num_experts (int): The number of experts (excluding zero_experts).
+        total_num_tokens (int): The total number of tokens in the batch.
+
+    Returns:
+        torch.Tensor: The maximum violation ratio across all experts.
     """
-    # Skip aux loss logging if layer_number is None.
-    if layer_number is None:
-        return
 
-    tracker = get_moe_layer_wise_logging_tracker()
-    if name not in tracker:
-        tracker[name] = {}
-        tracker[name]["values"] = torch.zeros(num_layers, device=loss.device)
-    tracker[name]["values"][layer_number - 1] += loss.detach()  # Aggregate the loss for the layer.
-    tracker[name]["reduce_group"] = reduce_group
-    tracker[name]["avg_group"] = avg_group
+    # NOTE: For the ideal tokens per expert case (uniform distribution), we still calculate based on total_num_tokens (across the batch), eventhough the zero-experts will rob tokens from some FFN experts.
+
+    tokens_per_expert = routing_map[:, :num_experts].sum(dim=0).float()
+    ideal_tokens_per_expert = total_num_tokens / num_experts # perfectly uniform load
+    violation_ratios = (tokens_per_expert - ideal_tokens_per_expert) / ideal_tokens_per_expert
+    max_violation = torch.max(violation_ratios)
+    return max_violation
 
 
-def save_to_zero_expert_tracker(
+def compute_zero_expert_metrics(
+    routing_map: torch.Tensor,
+    num_experts: int,
+):
+    """Compute metrics related to zero expert routing.
+
+    Args:
+        routing_map (torch.Tensor): Boolean tensor of shape [num_tokens, num_experts + num_zero_experts]
+            indicating which experts were selected for each token.
+        num_experts (int): The number of FFN experts (excluding zero_experts).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]:
+            - total_zero_expert_tokens: Total number of tokens routed to zero experts
+            - tokens_with_only_zero_experts: Number of tokens routed ONLY to zero experts (no FFN)
+    """
+    # Total tokens routed to all zero experts in this batch
+    total_zero_expert_tokens = routing_map[:, num_experts:].sum()
+    # Tokens that chose only zero experts (no FFN experts)
+    tokens_with_only_zero_experts = (routing_map[:, :num_experts].sum(dim=1) == 0).sum()
+
+    return total_zero_expert_tokens, tokens_with_only_zero_experts
+
+
+def save_to_moe_metrics_tracker(
     name: str,
-    count: torch.Tensor,
+    value: torch.Tensor,
     layer_number: int,
     num_layers: int,
     reduce_group: torch.distributed.ProcessGroup = None,
     avg_group: torch.distributed.ProcessGroup = None,
 ):
-    """Save the zero expert token count for logging.
+    """Save a MoE metric (auxiliary loss, count, violation, or any other value) for logging.
     Args:
         name (str): The name of the metric.
-        count (torch.Tensor): Amount of tokens that chose a zero expert in the layer.
-        layer_number (int): Layer index of the loss.
+        value (torch.Tensor): The metric value (loss, count, violation, etc.).
+        layer_number (int): Layer index of the metric.
         num_layers (int): The number of total layers.
-        reduce_group (torch.distributed.ProcessGroup): The group for reducing the count.
-        avg_group (torch.distributed.ProcessGroup): The group for averaging the count.
+        reduce_group (torch.distributed.ProcessGroup): The group for reducing the metric.
+        avg_group (torch.distributed.ProcessGroup): The group for averaging the metric.
     """
     # Skip logging if layer_number is None.
     if layer_number is None:
@@ -758,8 +778,8 @@ def save_to_zero_expert_tracker(
     tracker = get_moe_layer_wise_logging_tracker()
     if name not in tracker:
         tracker[name] = {}
-        tracker[name]["values"] = torch.zeros(num_layers, device=count.device)
-    tracker[name]["values"][layer_number - 1] += count
+        tracker[name]["values"] = torch.zeros(num_layers, device=value.device)
+    tracker[name]["values"][layer_number - 1] += value.detach()  # Aggregate the value for the layer.
     tracker[name]["reduce_group"] = reduce_group
     tracker[name]["avg_group"] = avg_group
 
@@ -840,8 +860,8 @@ def track_moe_metrics(
     if mtp_num_layers is not None:
         num_moe_layers += mtp_num_layers
 
-    # Metrics that are counts (not losses) and should not be scaled
-    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts'}
+    # Metrics that are counts or ratios (not losses) and should not be scaled
+    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts', 'expert_max_violation'}
 
     # Collect all MoE metrics (both aux losses and count metrics)
     moe_metrics = {}

@@ -13,9 +13,10 @@ from megatron.core.transformer.moe.moe_utils import (
     apply_random_logits,
     apply_router_token_dropping,
     compute_routing_scores_for_aux_loss,
+    compute_zero_expert_metrics,
+    expert_max_violation_batchwise,
     router_gating_linear,
-    save_to_aux_losses_tracker,
-    save_to_zero_expert_tracker,
+    save_to_moe_metrics_tracker,
     sinkhorn,
     switch_load_balancing_loss_func,
     topk_routing_with_score_function,
@@ -391,7 +392,7 @@ class TopKRouter(Router):
         num_layers = self.config.num_layers
         if self.config.mtp_num_layers is not None:
             num_layers += self.config.mtp_num_layers
-        save_to_aux_losses_tracker(
+        save_to_moe_metrics_tracker(
             aux_loss_name,
             aux_loss / aux_loss_coeff,
             self.layer_number,
@@ -441,7 +442,7 @@ class TopKRouter(Router):
             num_layers = self.config.num_layers
             if self.config.mtp_num_layers is not None:
                 num_layers += self.config.mtp_num_layers
-            save_to_aux_losses_tracker(
+            save_to_moe_metrics_tracker(
                 "z_loss", z_loss / moe_z_loss_coeff, self.layer_number, num_layers
             )
         return logits
@@ -536,10 +537,9 @@ class TopKRouter(Router):
         # Save to tracker for logging (no communication here - happens in track_zero_expert_metrics)
         if self.num_zero_experts > 0 and self.training and torch.is_grad_enabled():
             with torch.no_grad():
-                # Total tokens routed to all zero experts in this batch
-                total_zero_expert_tokens = routing_map[:, self.num_experts:].sum()
-                # Tokens that chose only zero experts (no FFN experts)
-                total_tokens_with_only_zero_experts = (routing_map[:, :self.num_experts].sum(dim=1) == 0).sum()
+                total_zero_expert_tokens, total_tokens_with_only_zero_experts = compute_zero_expert_metrics(
+                    routing_map, self.num_experts
+                )
 
                 # Get number of layers for tracker
                 num_layers = self.config.num_layers
@@ -547,16 +547,51 @@ class TopKRouter(Router):
                     num_layers += self.config.mtp_num_layers
 
                 # Save to the global tracker
-                save_to_zero_expert_tracker(
+                save_to_moe_metrics_tracker(
                     "zero_expert_tokens",
                     total_zero_expert_tokens,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
                 )
-                save_to_zero_expert_tracker(
+                save_to_moe_metrics_tracker(
                     "tokens_with_only_zero_experts",
                     total_tokens_with_only_zero_experts,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+                # Compute fraction of tokens routed to zero experts
+                total_num_tokens = routing_map.size(0)
+                save_to_moe_metrics_tracker(
+                    "zero_expert_token_fraction",
+                    total_zero_expert_tokens / total_num_tokens,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+
+        # Track expert load imbalance via max violation metric
+        if self.training and torch.is_grad_enabled():
+            with torch.no_grad():
+                # Calculate the maximum expert violation
+                num_tokens = routing_map.shape[0]
+                total_num_tokens = num_tokens * self.tp_cp_group.size()
+                max_violation = expert_max_violation_batchwise(
+                    routing_map=routing_map,
+                    num_experts=self.config.num_moe_experts, # we exclude zero experts in violation calculation
+                    total_num_tokens=total_num_tokens,
+                )
+
+                # Get number of layers for tracker
+                num_layers = self.config.num_layers
+                if self.config.mtp_num_layers is not None:
+                    num_layers += self.config.mtp_num_layers
+
+                # Save to the global tracker
+                save_to_moe_metrics_tracker(
+                    "expert_max_violation",
+                    max_violation,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
