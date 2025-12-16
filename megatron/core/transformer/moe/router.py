@@ -562,10 +562,10 @@ class TopKRouter(Router):
                     reduce_group=self.tp_cp_group,
                 )
                 # Compute fraction of tokens routed to zero experts
-                total_num_tokens = routing_map.size(0)
+                total_num_tokens = routing_map.size(0) * self.tp_cp_group.size()
                 save_to_moe_metrics_tracker(
-                    "zero_expert_token_fraction",
-                    total_zero_expert_tokens / total_num_tokens,
+                    "zero_expert_routed_tokens_fraction",
+                    total_zero_expert_tokens / (total_num_tokens * self.topk),
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,

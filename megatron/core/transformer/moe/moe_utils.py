@@ -108,6 +108,8 @@ def switch_load_balancing_loss_func(
         zero_expert_tau_mask[num_experts:] = zero_expert_tau
         tokens_per_expert = tokens_per_expert * zero_expert_tau_mask
 
+    total_experts = num_experts + num_zero_experts
+
     if fused:
         if not HAVE_TE or fused_moe_aux_loss is None:
             raise ValueError("fused_moe_aux_loss is not available. Please install TE >= 2.7.0.")
@@ -116,11 +118,10 @@ def switch_load_balancing_loss_func(
             tokens_per_expert=tokens_per_expert,
             total_num_tokens=total_num_tokens,
             topk=topk,
-            num_experts=num_experts,
+            num_experts=total_experts,
             coeff=moe_aux_loss_coeff,
         )
 
-    total_experts = num_experts + num_zero_experts
     aggregated_probs_per_expert = probs.sum(dim=0)
     aux_loss = torch.sum(aggregated_probs_per_expert * tokens_per_expert) * (
         total_experts * moe_aux_loss_coeff / (topk * total_num_tokens * total_num_tokens)
