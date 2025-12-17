@@ -103,10 +103,10 @@ def switch_load_balancing_loss_func(
     # This scales the contribution of zero experts in the loss: Σ(tau * f_i * P_i) for zero experts
     if num_zero_experts > 0 and zero_expert_tau != 1.0:
         zero_expert_tau_mask = torch.ones(
-            tokens_per_expert.shape[0], device=tokens_per_expert.device, dtype=tokens_per_expert.dtype
+            tokens_per_expert.shape[0], device=tokens_per_expert.device, dtype=probs.dtype
         )
         zero_expert_tau_mask[num_experts:] = zero_expert_tau
-        tokens_per_expert = tokens_per_expert * zero_expert_tau_mask
+        probs = probs * zero_expert_tau_mask.unsqueeze(0) # its the same as doing tokens_per_expert *= zero_expert_tau_mask (becasue the same tau is repeated for all tokens in the probs and that is the same as putting the value outside the sum over tokens)
 
     total_experts = num_experts + num_zero_experts
 
