@@ -55,6 +55,43 @@ class HFLMSchema(HFSchema):
         }
         super().__init__(schema=schema, layer_schema=layer_schema, prefix=prefix, layer_prefix=layer_prefix)
 
+
+class HFQwen3MoESchema(HFSchema):
+    def __init__(self, prefix, layer_prefix):
+        schema = {
+            "word_embeddings": f"{prefix}model.embed_tokens.weight",
+            "final_norm": f"{prefix}model.norm.weight",
+            "output_layer": f"{prefix}lm_head.weight",
+            "rope_inv_freq": f"{prefix}model.rotary_emb.inv_freq",
+        }
+
+        layer_schema = {
+            "input_norm_weight": "input_layernorm.weight",
+            "input_norm_bias": "input_layernorm.bias",
+            "post_norm_weight": "post_attention_layernorm.weight",
+            "post_norm_bias": "post_attention_layernorm.bias",
+            # Attention
+            "q_proj_weight": "self_attn.q_proj.weight",
+            "k_proj_weight": "self_attn.k_proj.weight",
+            "v_proj_weight": "self_attn.v_proj.weight",
+            "q_proj_bias": "self_attn.q_proj.bias",
+            "k_proj_bias": "self_attn.k_proj.bias",
+            "v_proj_bias": "self_attn.v_proj.bias",
+            "dense_weight": "self_attn.o_proj.weight",
+            "dense_bias": "self_attn.o_proj.bias",
+            # Q/K normalization (RMSNorm on head_dim)
+            "q_norm_weight": "self_attn.q_norm.weight",
+            "k_norm_weight": "self_attn.k_norm.weight",
+            # Router
+            "router_weight": "mlp.gate.weight",
+            # Expert weights (stored as 3D tensors in HF: [num_experts, ...])
+            "experts_weight_gate_up": "mlp.experts.gate_up_proj.weight",
+            "experts_weight_down": "mlp.experts.down_proj.weight",
+        }
+
+        super().__init__(schema=schema, layer_schema=layer_schema, prefix=prefix, layer_prefix=layer_prefix)
+
+
 class HFInternViTSchema(HFSchema):
     def __init__(self, prefix, layer_prefix, use_swiglu=False):
         schema = {
@@ -176,3 +213,10 @@ def get_language_model_schema(
     use_swiglu=False,
 ) -> HFSchema:
     return HFLMSchema(prefix, layer_prefix, use_swiglu=use_swiglu)
+
+
+def get_qwen3_moe_schema(
+    prefix: T.Optional[str] = "",
+    layer_prefix: T.Optional[str] = "",
+) -> HFSchema:
+    return HFQwen3MoESchema(prefix, layer_prefix)
