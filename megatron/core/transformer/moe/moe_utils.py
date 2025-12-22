@@ -710,12 +710,12 @@ def expert_max_violation_batchwise(
     num_experts: int,
     total_num_tokens: int,
 ):
-    """Compute the maximum expert violation in the batch (only among FFN experts).
+    """Compute the maximum expert violation (batch version) in the batch (only among FFN experts).
 
     Args:
         routing_map (torch.Tensor): Boolean tensor of shape [num_tokens, num_experts + num_zero_experts]
             indicating which experts were selected for each token.
-        num_experts (int): The number of experts (excluding zero_experts).
+        num_experts (int): The number of experts (excluding zero_experts, only ffn experts).
         total_num_tokens (int): The total number of tokens in the batch.
 
     Returns:
@@ -724,8 +724,16 @@ def expert_max_violation_batchwise(
 
     # NOTE: For the ideal tokens per expert case (uniform distribution), we still calculate based on total_num_tokens (across the batch), eventhough the zero-experts will rob tokens from some FFN experts.
 
-    tokens_per_expert = routing_map[:, :num_experts].sum(dim=0).float()
-    ideal_tokens_per_expert = total_num_tokens / num_experts # perfectly uniform load
+    tokens_per_expert = routing_map[:, :num_experts].sum(dim=0).float() # we only care about FFN experts here
+    # Calculate the TOTAL tokens that actually made it to FFN layers
+    #    (This excludes tokens taken by zero experts)
+    effective_total_tokens = tokens_per_expert.sum() # if we don't have zero experts, this is the same as total_num_tokens as we would have total_num_tokens * num_experts / num_experts = total_num_tokens
+
+    if effective_total_tokens == 0:
+        return torch.tensor(0.0, device=routing_map.device)
+
+    ideal_tokens_per_expert = effective_total_tokens / num_experts # perfectly uniform load across the effective tokens used for FFN experts
+
     violation_ratios = (tokens_per_expert - ideal_tokens_per_expert) / ideal_tokens_per_expert
     max_violation = torch.max(violation_ratios)
     return max_violation
