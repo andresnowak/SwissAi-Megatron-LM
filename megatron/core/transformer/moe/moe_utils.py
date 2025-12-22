@@ -727,12 +727,12 @@ def expert_max_violation_batchwise(
     tokens_per_expert = routing_map[:, :num_experts].sum(dim=0).float() # we only care about FFN experts here
     # Calculate the TOTAL tokens that actually made it to FFN layers
     #    (This excludes tokens taken by zero experts)
-    effective_total_tokens = tokens_per_expert.sum() # if we don't have zero experts, this is the same as total_num_tokens as we would have total_num_tokens * num_experts / num_experts = total_num_tokens
+    effective_total_tokens = tokens_per_expert.sum()
 
     if effective_total_tokens == 0:
         return torch.tensor(0.0, device=routing_map.device)
 
-    ideal_tokens_per_expert = effective_total_tokens / num_experts # perfectly uniform load across the effective tokens used for FFN experts
+    ideal_tokens_per_expert = effective_total_tokens / num_experts  # if we don't have zero experts, then we have total_num_tokens * top_k / num_experts, if top_k=num_experts, then the uniform distribution is total_num_tokens (for each expert)
 
     violation_ratios = (tokens_per_expert - ideal_tokens_per_expert) / ideal_tokens_per_expert
     max_violation = torch.max(violation_ratios)
