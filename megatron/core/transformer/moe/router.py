@@ -584,6 +584,7 @@ class TopKRouter(Router):
                 # Calculate the maximum expert violation
                 num_tokens = routing_map.shape[0]
                 total_num_tokens = num_tokens * self.tp_cp_group.size()
+                # TODO: The max violation calculation is incorrect if we have tp_cp_group > 1 (because each group only sees part of the tokens)
                 max_violation = expert_max_violation_batchwise(
                     routing_map=routing_map,
                     num_experts=self.config.num_moe_experts, # we exclude zero experts in violation calculation
