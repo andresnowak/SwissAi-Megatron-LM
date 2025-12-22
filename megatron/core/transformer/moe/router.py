@@ -570,6 +570,13 @@ class TopKRouter(Router):
                     num_layers,
                     reduce_group=self.tp_cp_group,
                 )
+                save_to_moe_metrics_tracker(
+                    "tokens_with_only_zero_experts_fraction",
+                    total_tokens_with_only_zero_experts / (total_num_tokens * self.topk),
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
 
         # Track expert load imbalance via max violation metric
         if self.training and torch.is_grad_enabled():
