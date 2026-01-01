@@ -739,7 +739,7 @@ def expert_max_violation_batchwise(
     return max_violation
 
 
-def compute_zero_expert_metrics(
+def comptue_expert_metrics(
     routing_map: torch.Tensor,
     num_experts: int,
 ):
@@ -758,9 +758,16 @@ def compute_zero_expert_metrics(
     # Total tokens routed to all zero experts in this batch
     total_zero_expert_tokens = routing_map[:, num_experts:].sum()
     # Tokens that chose only zero experts (no FFN experts)
-    tokens_with_only_zero_experts = (routing_map[:, :num_experts].sum(dim=1) == 0).sum()
+    tokens_with_only_zero_experts = (routing_map[:, :num_experts].sum(dim=1) == 0).sum() # this is saying how many tokens have selected 0 ffn experts (remember the zero experts are always the last ones in the routing map)
 
-    return total_zero_expert_tokens, tokens_with_only_zero_experts
+    # Total tokens routed to all ffn experts in this batch
+    total_ffn_expert_tokens = routing_map[:, :num_experts].sum()
+    # Tokens that chose only ffn experts (no zero experts)
+    tokens_with_only_ffn_experts = (routing_map[:, num_experts:].sum(dim=1) == 0).sum() # here we are counting how many tokens have selected zero zero-experts
+
+    avg_ffn_to_zero_expert_ratio_per_token = (routing_map[:, :num_experts].sum(dim=1) / (routing_map[:, num_experts:].sum(dim=1) + 1e-8)).mean()
+
+    return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token
 
 
 def save_to_moe_metrics_tracker(

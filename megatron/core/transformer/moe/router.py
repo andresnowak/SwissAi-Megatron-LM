@@ -537,7 +537,7 @@ class TopKRouter(Router):
         # Save to tracker for logging (no communication here - happens in track_zero_expert_metrics)
         if self.num_zero_experts > 0 and self.training and torch.is_grad_enabled():
             with torch.no_grad():
-                total_zero_expert_tokens, total_tokens_with_only_zero_experts = compute_zero_expert_metrics(
+                total_zero_expert_tokens, total_tokens_with_only_zero_experts, total_ffn_expert_tokens, total_tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token = compute_zero_expert_metrics(
                     routing_map, self.num_experts
                 )
 
@@ -546,7 +546,7 @@ class TopKRouter(Router):
                 if self.config.mtp_num_layers is not None:
                     num_layers += self.config.mtp_num_layers
 
-                # Save to the global tracker
+                # Zero expert metrics
                 save_to_moe_metrics_tracker(
                     "zero_expert_tokens",
                     total_zero_expert_tokens,
@@ -561,18 +561,36 @@ class TopKRouter(Router):
                     num_layers,
                     reduce_group=self.tp_cp_group,
                 )
+
                 # Compute fraction of tokens routed to zero experts
                 total_num_tokens = routing_map.size(0) * self.tp_cp_group.size()
+                total_routed_tokens = total_num_tokens * self.topk
                 save_to_moe_metrics_tracker(
                     "zero_expert_routed_tokens_fraction",
-                    total_zero_expert_tokens / (total_num_tokens * self.topk),
+                    total_zero_expert_tokens / total_routed_tokens,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
                 )
                 save_to_moe_metrics_tracker(
                     "tokens_with_only_zero_experts_fraction",
-                    total_tokens_with_only_zero_experts / (total_num_tokens * self.topk),
+                    total_tokens_with_only_zero_experts / total_routed_tokens,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+                # compute fraction of tokens routed to ffn experts
+                save_to_moe_metrics_tracker(
+                    "tokens_with_only_ffn_experts_fraction",
+                    total_tokens_with_only_ffn_experts / total_routed_tokens,
+                    self.layer_number,
+                    num_layers,
+                    reduce_group=self.tp_cp_group,
+                )
+                # average ffn to zero expert ratio per token
+                save_to_moe_metrics_tracker(
+                    "avg_ffn_to_zero_expert_ratio_per_token",
+                    avg_ffn_to_zero_expert_ratio_per_token,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
@@ -611,7 +629,7 @@ class TopKRouter(Router):
             # NOTE: doing this uses more memory (we do a copy of size num_ffn_epxerts * num_tokens (including batch))
             routing_map = routing_map[:, :self.num_experts].contiguous()
             probs = probs[:, :self.num_experts].contiguous()
-        
+
         return probs, routing_map
 
     def reset_global_aux_loss_tracker(self):
