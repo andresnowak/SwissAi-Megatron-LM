@@ -13,7 +13,7 @@ from megatron.core.transformer.moe.moe_utils import (
     apply_random_logits,
     apply_router_token_dropping,
     compute_routing_scores_for_aux_loss,
-    compute_zero_expert_metrics,
+    compute_expert_metrics,
     expert_max_violation_batchwise,
     router_gating_linear,
     save_to_moe_metrics_tracker,

@@ -739,7 +739,7 @@ def expert_max_violation_batchwise(
     return max_violation
 
 
-def comptue_expert_metrics(
+def compute_expert_metrics(
     routing_map: torch.Tensor,
     num_experts: int,
 ):
