@@ -838,7 +838,7 @@ def reduce_aux_losses_tracker_across_ranks(track_names: Optional[List[str]] = No
 
 
 def track_moe_metrics(
-    loss_scale: float,
+    loss_scale: float, # NOTE: this is just 1 / gradient_accumulation_steps unless customized
     iteration: int,
     writer,
     wandb_writer=None,
@@ -879,18 +879,11 @@ def track_moe_metrics(
     if mtp_num_layers is not None:
         num_moe_layers += mtp_num_layers
 
-    # Metrics that are counts or ratios (not losses) and should not be scaled
-    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts', 'expert_max_violation', 'tokens_with_only_ffn_experts_fraction', 'avg_ffn_to_zero_expert_ratio_per_token', 'tokens_with_only_zero_experts_fraction', 'zero_expert_routed_tokens_fraction'}
-
     # Collect all MoE metrics (both aux losses and count metrics)
     moe_metrics = {}
     for k, v in tracker.items():
-        if k in count_metrics:
-            # Don't scale count metrics
-            moe_metrics[k] = v['values'].float()
-        else:
-            # Scale loss metrics
-            moe_metrics[k] = v['values'].float() * loss_scale
+        # Scale metrics by gradient accumulation steps (as loss scale is 1 / grad_accum_steps by default)
+        moe_metrics[k] = v['values'].float() * loss_scale  # count metrics should also be scaled as they will be accumulated in the gradient accumulation steps
 
     for name, values_list in moe_metrics.items():
         if total_loss_dict is not None:

@@ -547,22 +547,6 @@ class TopKRouter(Router):
                 if self.config.mtp_num_layers is not None:
                     num_layers += self.config.mtp_num_layers
 
-                # Zero expert metrics
-                save_to_moe_metrics_tracker(
-                    "zero_expert_tokens",
-                    total_zero_expert_tokens,
-                    self.layer_number,
-                    num_layers,
-                    reduce_group=self.tp_cp_group,
-                )
-                save_to_moe_metrics_tracker(
-                    "tokens_with_only_zero_experts",
-                    total_tokens_with_only_zero_experts,
-                    self.layer_number,
-                    num_layers,
-                    reduce_group=self.tp_cp_group,
-                )
-
                 # Compute fraction of tokens routed to zero experts
                 total_num_tokens = routing_map.size(0) * self.tp_cp_group.size()
                 total_routed_tokens = total_num_tokens * self.topk
