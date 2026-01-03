@@ -877,7 +877,7 @@ def track_moe_metrics(
         num_moe_layers += mtp_num_layers
 
     # Metrics that are counts or ratios (not losses) and should not be scaled
-    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts', 'expert_max_violation'}
+    count_metrics = {'zero_expert_tokens', 'tokens_with_only_zero_experts', 'expert_max_violation', 'tokens_with_only_ffn_experts_fraction', 'avg_ffn_to_zero_expert_ratio_per_token', 'tokens_with_only_zero_experts_fraction', 'zero_expert_routed_tokens_fraction'}
 
     # Collect all MoE metrics (both aux losses and count metrics)
     moe_metrics = {}
