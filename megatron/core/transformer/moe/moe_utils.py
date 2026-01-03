@@ -765,7 +765,7 @@ def compute_expert_metrics(
     # Tokens that chose only ffn experts (no zero experts)
     tokens_with_only_ffn_experts = (routing_map[:, num_experts:].sum(dim=1) == 0).sum() # here we are counting how many tokens have selected zero zero-experts
 
-    avg_ffn_to_zero_expert_ratio_per_token = (routing_map[:, :num_experts].sum(dim=1) / (routing_map[:, num_experts:].sum(dim=1) + 1e-8)).mean()
+    avg_ffn_to_zero_expert_ratio_per_token = (routing_map[:, :num_experts].sum(dim=0) / (routing_map[:, num_experts:].sum(dim=0) + 1e-8)).mean()
 
     return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token
 
