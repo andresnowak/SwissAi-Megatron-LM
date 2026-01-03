@@ -733,6 +733,9 @@ def expert_max_violation_batchwise(
         return torch.tensor(0.0, device=routing_map.device)
 
     ideal_tokens_per_expert = effective_total_tokens / num_experts  # if we don't have zero experts, then we have total_num_tokens * top_k / num_experts, if top_k=num_experts, then the uniform distribution is total_num_tokens (for each expert)
+    ideal_tokens_per_expert = torch.where(
+        ideal_tokens_per_expert == 0, torch.ones_like(ideal_tokens_per_expert), ideal_tokens_per_expert
+    ) # to avoid division by zero
 
     violation_ratios = (tokens_per_expert - ideal_tokens_per_expert) / ideal_tokens_per_expert
     max_violation = torch.max(violation_ratios)
