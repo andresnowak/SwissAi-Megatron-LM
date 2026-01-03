@@ -758,14 +758,17 @@ def compute_expert_metrics(
     # Total tokens routed to all zero experts in this batch
     total_zero_expert_tokens = routing_map[:, num_experts:].sum()
     # Tokens that chose only zero experts (no FFN experts)
-    tokens_with_only_zero_experts = (routing_map[:, :num_experts].sum(dim=1) == 0).sum() # this is saying how many tokens have selected 0 ffn experts (remember the zero experts are always the last ones in the routing map)
+    ffn_experts_per_token = routing_map[:, :num_experts].sum(dim=1)
+    tokens_with_only_zero_experts = (ffn_experts_per_token == 0).sum() # this is saying how many tokens have selected 0 ffn experts (remember the zero experts are always the last ones in the routing map)
 
     # Total tokens routed to all ffn experts in this batch
     total_ffn_expert_tokens = routing_map[:, :num_experts].sum()
     # Tokens that chose only ffn experts (no zero experts)
-    tokens_with_only_ffn_experts = (routing_map[:, num_experts:].sum(dim=1) == 0).sum() # here we are counting how many tokens have selected zero zero-experts
+    zero_experts_per_token = routing_map[:, num_experts:].sum(dim=1)
+    tokens_with_only_ffn_experts = (zero_experts_per_token == 0).sum() # here we are counting how many tokens have selected zero zero-experts
 
-    avg_ffn_to_zero_expert_ratio_per_token = (routing_map[:, :num_experts].sum(dim=0) / (routing_map[:, num_experts:].sum(dim=0) + 1e-8)).mean()
+    zero_experts_count = torch.where(zero_experts_per_token == 0, torch.ones_like(zero_experts_per_token), zero_experts_per_token)
+    avg_ffn_to_zero_expert_ratio_per_token = (ffn_experts_per_token / zero_experts_count).mean()
 
     return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token
 
