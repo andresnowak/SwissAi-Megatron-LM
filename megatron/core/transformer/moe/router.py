@@ -316,7 +316,8 @@ class TopKRouter(Router):
         )
 
         total_num_tokens = seq_length * self.tp_cp_group.size()
-
+        # TODO: support zero experts in sequence-level aux loss
+        assert(self.num_zero_experts == 0, "Sequence-level aux loss with zero experts is not supported yet as we have to correclty apply the tau to each expert.")
         aux_loss = (
             switch_load_balancing_loss_func(
                 probs=scores_for_aux_loss,
@@ -537,7 +538,7 @@ class TopKRouter(Router):
         # Save to tracker for logging (no communication here - happens in track_zero_expert_metrics)
         if self.num_zero_experts > 0 and self.training and torch.is_grad_enabled():
             with torch.no_grad():
-                total_zero_expert_tokens, total_tokens_with_only_zero_experts, total_ffn_expert_tokens, total_tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token = compute_zero_expert_metrics(
+                total_zero_expert_tokens, total_tokens_with_only_zero_experts, total_ffn_expert_tokens, total_tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token = compute_expert_metrics(
                     routing_map, self.num_experts
                 )
 
@@ -593,7 +594,7 @@ class TopKRouter(Router):
                     avg_ffn_to_zero_expert_ratio_per_token,
                     self.layer_number,
                     num_layers,
-                    reduce_group=self.tp_cp_group,
+                    avg_group=self.tp_cp_group, # because we want a ratio of ffn to zero experts per token and each rank will have its own ratio and we need to average them across the tp_cp_group (as the sequence is divided in the context parallelism group)
                 )
 
         # Track expert load imbalance via max violation metric
@@ -603,6 +604,9 @@ class TopKRouter(Router):
                 num_tokens = routing_map.shape[0]
                 total_num_tokens = num_tokens * self.tp_cp_group.size()
                 # TODO: The max violation calculation is incorrect if we have tp_cp_group > 1 (because each group only sees part of the tokens)
+                if self.num_zero_experts > 0 and self.tp_cp_group.size() > 1:
+                    assert(False, "Max violation calculation with zero experts is not supported yet for tp_cp_group > 1.")
+
                 max_violation = expert_max_violation_batchwise(
                     routing_map=routing_map,
                     num_experts=self.config.num_moe_experts, # we exclude zero experts in violation calculation
