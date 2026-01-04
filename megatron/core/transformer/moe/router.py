@@ -559,7 +559,7 @@ class TopKRouter(Router):
                 )
                 save_to_moe_metrics_tracker(
                     "tokens_with_only_zero_experts_fraction",
-                    total_tokens_with_only_zero_experts / total_routed_tokens,
+                    total_tokens_with_only_zero_experts / total_num_tokens, # here we don't divide by topk as the max value for total_tokens_with_only_zero_experts is (batch * seq_length)
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
@@ -567,7 +567,7 @@ class TopKRouter(Router):
                 # compute fraction of tokens routed to ffn experts
                 save_to_moe_metrics_tracker(
                     "tokens_with_only_ffn_experts_fraction",
-                    total_tokens_with_only_ffn_experts / total_routed_tokens,
+                    total_tokens_with_only_ffn_experts / total_num_tokens,
                     self.layer_number,
                     num_layers,
                     reduce_group=self.tp_cp_group,
