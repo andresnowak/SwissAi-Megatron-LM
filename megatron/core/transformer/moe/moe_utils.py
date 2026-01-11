@@ -775,8 +775,8 @@ def compute_expert_metrics(
     avg_ffn_to_zero_expert_ratio_per_token = (ffn_experts_per_token / zero_experts_count).mean()
 
     # Statistics of ffn experts selected per token
-    avg_ffn_expert_usage = ffn_experts_per_token.mean()
-    std_ffn_expert_usage = ffn_experts_per_token.std()
+    avg_ffn_expert_usage = ffn_experts_per_token.to(torch.float32).mean()
+    std_ffn_expert_usage = ffn_experts_per_token.to(torch.float32).std()
 
     return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token, avg_ffn_expert_usage, std_ffn_expert_usage
 
