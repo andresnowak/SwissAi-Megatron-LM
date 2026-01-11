@@ -1533,6 +1533,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
             track_names.append('avg_ffn_to_zero_expert_ratio_per_token')
             track_names.append('tokens_with_only_zero_experts_fraction')
             track_names.append('zero_expert_routed_tokens_fraction')
+            track_names.append('avg_ffn_expert_usage_per_token')
+            track_names.append('std_ffn_expert_usage_per_token')
         track_moe_metrics(
             loss_scale=moe_loss_scale,
             iteration=iteration,

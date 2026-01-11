@@ -546,8 +546,8 @@ class TopKRouter(Router):
                     total_ffn_expert_tokens,
                     total_tokens_with_only_ffn_experts,
                     avg_ffn_to_zero_expert_ratio_per_token,
-                    avg_ffn_expert_usage,
-                    std_ffn_expert_usage,
+                    avg_ffn_expert_usage_per_token,
+                    std_ffn_expert_usage_per_token,
                 ) = compute_expert_metrics(routing_map, self.num_experts)
 
                 # Get number of layers for tracker
@@ -590,15 +590,15 @@ class TopKRouter(Router):
                 )
                 # ffn expert usage stats
                 save_to_moe_metrics_tracker(
-                    "avg_ffn_expert_usage",
-                    avg_ffn_expert_usage,
+                    "avg_ffn_expert_usage_per_token",
+                    avg_ffn_expert_usage_per_token,
                     self.layer_number,
                     num_layers,
                     avg_group=self.tp_cp_group,  # Doing average will be the true global mean as we will have ((sum_a + sum_b + sum_c) / N) / 3 =  (sum_a + sum_b + sum_c) / (3 * N)
                 )
                 save_to_moe_metrics_tracker(
-                    "std_ffn_expert_usage",
-                    std_ffn_expert_usage,
+                    "std_ffn_expert_usage_per_token",
+                    std_ffn_expert_usage_per_token,
                     self.layer_number,
                     num_layers,
                     avg_group=self.tp_cp_group,  # TODO: This would be an approximation and not the true global std. To compute true global std, we need to gather from all cp ranks and then compute the std.
