@@ -12,8 +12,8 @@ from megatron.core.transformer.moe.moe_utils import (
     ProcessGroupCollection,
     apply_random_logits,
     apply_router_token_dropping,
-    compute_routing_scores_for_aux_loss,
     compute_expert_metrics,
+    compute_routing_scores_for_aux_loss,
     expert_max_violation_batchwise,
     router_gating_linear,
     save_to_moe_metrics_tracker,
@@ -69,7 +69,7 @@ class Router(ABC, MegatronModule):
         if self.config.perform_initialization:
             self.config.init_method(self.weight)
         self.weight.data = self.weight.data.to(dtype=self.config.params_dtype)
-        setattr(self.weight, 'sequence_parallel', self.config.sequence_parallel)
+        setattr(self.weight, "sequence_parallel", self.config.sequence_parallel)
 
     def gating(self, input: torch.Tensor):
         """Forward pass of the router gate.
@@ -80,14 +80,14 @@ class Router(ABC, MegatronModule):
         Returns:
             torch.Tensor: Logits tensor.
         """
-        if self.weight.device.type == 'cpu':
+        if self.weight.device.type == "cpu":
             # move weights to GPU
             self.weight.data = self.weight.data.to(device=torch.cuda.current_device())
         # Convert to specified datatype for routing computation if enabled
         router_dtype = input.dtype
-        if self.config.moe_router_dtype == 'fp32':
+        if self.config.moe_router_dtype == "fp32":
             router_dtype = torch.float32
-        elif self.config.moe_router_dtype == 'fp64':
+        elif self.config.moe_router_dtype == "fp64":
             router_dtype = torch.float64
         logits = router_gating_linear(input, self.weight, router_dtype)
         return logits
@@ -154,7 +154,7 @@ class TopKRouter(Router):
         self.enable_expert_bias = self.config.moe_router_enable_expert_bias
         if self.enable_expert_bias:
             self.register_buffer(
-                'local_tokens_per_expert',
+                "local_tokens_per_expert",
                 torch.zeros(
                     self.total_num_experts,  # Include zero experts in tracking
                     dtype=torch.float32,
@@ -163,7 +163,7 @@ class TopKRouter(Router):
                 persistent=False,
             )
             self.register_buffer(
-                'expert_bias',
+                "expert_bias",
                 torch.zeros(
                     self.total_num_experts,  # Include zero experts in bias
                     dtype=torch.float32,
@@ -177,7 +177,7 @@ class TopKRouter(Router):
         # Initialize global tokens per expert for global aux loss
         if self.get_aux_loss_coeff("global_aux_loss") > 0:
             self.register_buffer(
-                'global_tokens_per_expert',
+                "global_tokens_per_expert",
                 torch.zeros(
                     self.total_num_experts,  # Include zero experts in global tracking
                     dtype=torch.float32,
@@ -186,8 +186,10 @@ class TopKRouter(Router):
                 persistent=False,
             )
             self.register_buffer(
-                'ga_steps',
-                torch.tensor(0, dtype=torch.float32, device=torch.cuda.current_device()),
+                "ga_steps",
+                torch.tensor(
+                    0, dtype=torch.float32, device=torch.cuda.current_device()
+                ),
                 persistent=False,
             )
         else:
@@ -201,7 +203,7 @@ class TopKRouter(Router):
         When using bf16/fp16, the expert bias gets converted to lower precision in Float16Module.
         We keep it in float32 to avoid routing errors when updating the expert_bias.
         """
-        if hasattr(self, 'expert_bias') and self.expert_bias is not None:
+        if hasattr(self, "expert_bias") and self.expert_bias is not None:
             if self.expert_bias.dtype != torch.float32:
                 self.expert_bias.data = self.expert_bias.data.to(torch.float32)
 
@@ -538,9 +540,15 @@ class TopKRouter(Router):
         # Save to tracker for logging (no communication here - happens in track_zero_expert_metrics)
         if self.num_zero_experts > 0 and self.training and torch.is_grad_enabled():
             with torch.no_grad():
-                total_zero_expert_tokens, total_tokens_with_only_zero_experts, total_ffn_expert_tokens, total_tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token = compute_expert_metrics(
-                    routing_map, self.num_experts
-                )
+                (
+                    total_zero_expert_tokens,
+                    total_tokens_with_only_zero_experts,
+                    total_ffn_expert_tokens,
+                    total_tokens_with_only_ffn_experts,
+                    avg_ffn_to_zero_expert_ratio_per_token,
+                    avg_ffn_expert_usage,
+                    std_ffn_expert_usage,
+                ) = compute_expert_metrics(routing_map, self.num_experts)
 
                 # Get number of layers for tracker
                 num_layers = self.config.num_layers
@@ -555,7 +563,7 @@ class TopKRouter(Router):
                     total_zero_expert_tokens / total_routed_tokens,
                     self.layer_number,
                     num_layers,
-                    reduce_group=self.tp_cp_group,
+                    reduce_group=self.tp_cp_group,  # Here we use reduce group as each rank will have the same global denominator
                 )
                 save_to_moe_metrics_tracker(
                     "tokens_with_only_zero_experts_fraction",
@@ -578,7 +586,22 @@ class TopKRouter(Router):
                     avg_ffn_to_zero_expert_ratio_per_token,
                     self.layer_number,
                     num_layers,
-                    avg_group=self.tp_cp_group, # because we want a ratio of ffn to zero experts per token and each rank will have its own ratio and we need to average them across the tp_cp_group (as the sequence is divided in the context parallelism group)
+                    avg_group=self.tp_cp_group,  # because we want a ratio of ffn to zero experts per token and each rank will have its own ratio and we need to average them across the tp_cp_group (as the sequence is divided in the context parallelism group)
+                )
+                # ffn expert usage stats
+                save_to_moe_metrics_tracker(
+                    "avg_ffn_expert_usage",
+                    avg_ffn_expert_usage,
+                    self.layer_number,
+                    num_layers,
+                    avg_group=self.tp_cp_group,  # Doing average will be the true global mean as we will have ((sum_a + sum_b + sum_c) / N) / 3 =  (sum_a + sum_b + sum_c) / (3 * N)
+                )
+                save_to_moe_metrics_tracker(
+                    "std_ffn_expert_usage",
+                    std_ffn_expert_usage,
+                    self.layer_number,
+                    num_layers,
+                    avg_group=self.tp_cp_group,  # TODO: This would be an approximation and not the true global std. To compute true global std, we need to gather from all cp ranks and then compute the std.
                 )
 
         # Track expert load imbalance via max violation metric
@@ -593,7 +616,7 @@ class TopKRouter(Router):
 
                 max_violation = expert_max_violation_batchwise(
                     routing_map=routing_map,
-                    num_experts=self.config.num_moe_experts, # we exclude zero experts in violation calculation
+                    num_experts=self.config.num_moe_experts,  # we exclude zero experts in violation calculation
                     total_num_tokens=total_num_tokens,
                 )
 
@@ -615,8 +638,8 @@ class TopKRouter(Router):
         # The aux loss already captured their contribution, and they produce no gradient (and they complicate the permuting becuase they are extra experts)
         if self.num_zero_experts > 0:
             # NOTE: doing this uses more memory (we do a copy of size num_ffn_epxerts * num_tokens (including batch))
-            routing_map = routing_map[:, :self.num_experts].contiguous()
-            probs = probs[:, :self.num_experts].contiguous()
+            routing_map = routing_map[:, : self.num_experts].contiguous()
+            probs = probs[:, : self.num_experts].contiguous()
 
         return probs, routing_map
 

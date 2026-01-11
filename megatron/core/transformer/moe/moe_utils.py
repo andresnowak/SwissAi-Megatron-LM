@@ -770,10 +770,15 @@ def compute_expert_metrics(
     zero_experts_per_token = routing_map[:, num_experts:].sum(dim=1)
     tokens_with_only_ffn_experts = (zero_experts_per_token == 0).sum() # here we are counting how many tokens have selected zero zero-experts
 
+    # Ratio of ffn experts to zero experts per token (averaged over all tokens)
     zero_experts_count = torch.where(zero_experts_per_token == 0, torch.ones_like(zero_experts_per_token), zero_experts_per_token)
     avg_ffn_to_zero_expert_ratio_per_token = (ffn_experts_per_token / zero_experts_count).mean()
 
-    return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token
+    # Statistics of ffn experts selected per token
+    avg_ffn_expert_usage = ffn_experts_per_token.mean()
+    std_ffn_expert_usage = ffn_experts_per_token.std()
+
+    return total_zero_expert_tokens, tokens_with_only_zero_experts, total_ffn_expert_tokens, tokens_with_only_ffn_experts, avg_ffn_to_zero_expert_ratio_per_token, avg_ffn_expert_usage, std_ffn_expert_usage
 
 
 def save_to_moe_metrics_tracker(
