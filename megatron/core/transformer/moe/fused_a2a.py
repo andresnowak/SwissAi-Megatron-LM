@@ -2,10 +2,11 @@
 # Portions of this code are from DeepSeek DeepEP project
 # Copyright (c) 2025 DeepSeek
 # Licensed under the MIT License - https://github.com/deepseek-ai/DeepEP/blob/main/LICENSE
+import dis
 
 
 try:
-    from deep_ep import Buffer
+    from deep_ep import Buffer, Config
     from deep_ep.utils import EventHandle, EventOverlap
 
     HAVE_DEEP_EP = True
@@ -13,8 +14,11 @@ except ImportError:
     HAVE_DEEP_EP = False
 
 import torch
+from typing import Optional, Tuple
 
 _buffer = None
+_dispatch_config = None
+_combine_config = None
 
 
 def get_hidden_bytes(x: torch.Tensor) -> int:
@@ -27,6 +31,20 @@ def get_hidden_bytes(x: torch.Tensor) -> int:
         int: Number of hidden bytes
     """
     return x.size(1) * max(x.element_size(), 2)
+
+
+def get_dispatch_config(group_size: int):
+    """Get the dispatch config, using custom config if set, otherwise default."""
+    if _dispatch_config is not None:
+        return _dispatch_config
+    return Buffer.get_dispatch_config(group_size)
+
+
+def get_combine_config(group_size: int):
+    """Get the combine config, using custom config if set, otherwise default."""
+    if _combine_config is not None:
+        return _combine_config
+    return Buffer.get_combine_config(group_size)
 
 
 def get_buffer(group: torch.distributed.ProcessGroup, hidden_bytes: int):
@@ -42,8 +60,8 @@ def get_buffer(group: torch.distributed.ProcessGroup, hidden_bytes: int):
     global _buffer
     num_nvl_bytes, num_rdma_bytes = 0, 0
     for config in (
-        Buffer.get_dispatch_config(group.size()),
-        Buffer.get_combine_config(group.size()),
+        get_dispatch_config(group.size()),
+        get_combine_config(group.size()),
     ):
         # Split long line for PEP8 compliance
         num_nvl_bytes = max(
@@ -85,6 +103,7 @@ class FusedDispatch(torch.autograd.Function):
             previous_event = EventOverlap(EventHandle())
         # Calculate layout before actual dispatch
         buffer = get_buffer(group, get_hidden_bytes(x))
+        dispatch_config = get_dispatch_config(group.size())
         (
             num_tokens_per_rank,
             num_tokens_per_rdma_rank,
@@ -120,6 +139,7 @@ class FusedDispatch(torch.autograd.Function):
             previous_event=event,  # wait in deepep::intra/inter_dispatch
             async_finish=async_finish,
             allocate_on_comm_stream=allocate_on_comm_stream,
+            config=dispatch_config,
         )
 
         # Make sure current stream is synchronized
@@ -145,6 +165,7 @@ class FusedDispatch(torch.autograd.Function):
         previous_event = None
         if ctx.async_finish:
             previous_event = EventOverlap(EventHandle())
+        combine_config = get_combine_config(ctx.group.size())
         grad_x, grad_token_probs, after_event = buffer.combine(
             grad_output.contiguous(),
             handle,
@@ -152,6 +173,7 @@ class FusedDispatch(torch.autograd.Function):
             previous_event=previous_event,
             async_finish=ctx.async_finish,
             allocate_on_comm_stream=ctx.allocate_on_comm_stream,
+            config=combine_config,
         )
         # Make sure current stream is synchronized
         if ctx.async_finish:
@@ -169,12 +191,14 @@ class FusedCombine(torch.autograd.Function):
         if async_finish:
             previous_event = EventOverlap(EventHandle())
         buffer = get_buffer(group, get_hidden_bytes(x))
+        combine_config = get_combine_config(group.size())
         combined_x, _, after_event = buffer.combine(
             x,
             handle=handle,
             async_finish=async_finish,
             previous_event=previous_event,
             allocate_on_comm_stream=allocate_on_comm_stream,
+            config=combine_config,
         )
         # Make sure current stream is synchronized
         if async_finish:
@@ -193,12 +217,14 @@ class FusedCombine(torch.autograd.Function):
         if ctx.async_finish:
             previous_event = EventOverlap(EventHandle())
         buffer = get_buffer(ctx.group, get_hidden_bytes(grad_output))
+        dispatch_config = get_dispatch_config(ctx.group.size())
         grad_x, _, _, _, _, after_event = buffer.dispatch(
             grad_output.contiguous(),
             handle=ctx.handle,
             previous_event=previous_event,
             async_finish=ctx.async_finish,
             allocate_on_comm_stream=ctx.allocate_on_comm_stream,
+            config=dispatch_config,
         )
         # Make sure current stream is synchronized
         if ctx.async_finish:
@@ -254,6 +280,28 @@ if HAVE_DEEP_EP:
         """
         return FusedCombine.apply(x, group, handle, async_finish, allocate_on_comm_stream)
 
+    def set_deepep_configs(
+        dispatch_config: Optional[Tuple[int, int, int, int, int]] = None,
+        combine_config: Optional[Tuple[int, int, int, int, int]] = None,
+    ):
+        """Set custom DeepEP configs for dispatch and combine operations.
+
+        Args:
+            dispatch_config: Tuple of (num_sms, num_max_nvl_chunked_send_tokens,
+                            num_max_nvl_chunked_recv_tokens, num_max_rdma_chunked_send_tokens,
+                            num_max_rdma_chunked_recv_tokens) for dispatch. None uses defaults.
+            combine_config: Same format for combine. None uses defaults.
+        """
+        global _dispatch_config, _combine_config
+        _dispatch_config = Config(*dispatch_config) if dispatch_config is not None else None
+        _combine_config = Config(*combine_config) if combine_config is not None else None
+        if dispatch_config is not None:
+            set_deepep_num_sms(dispatch_config[0])
+        if dispatch_config is not None and combine_config is not None:
+            assert (
+                dispatch_config[0] == combine_config[0]
+            ), "Dispatch and Combine num_sms must be the same"
+
     def set_deepep_num_sms(num_sms):
         """Sets the number of SMs to use for DeepEP"""
         Buffer.set_num_sms(num_sms)
@@ -262,3 +310,4 @@ else:
     fused_dispatch = None
     fused_combine = None
     set_deepep_num_sms = None
+    set_deepep_configs = None

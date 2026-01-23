@@ -332,6 +332,33 @@ def moe_freq_type(x):
         return int(x)
 
 
+def _parse_deepep_config(config_str):
+    """Parse DeepEP config string to tuple.
+
+    Args:
+        config_str: Comma-separated string of ints: num_sms,nvl_send,nvl_recv[,rdma_send,rdma_recv]
+                   RDMA values default to 0 if not provided.
+
+    Returns:
+        Tuple of 5 ints or None if config_str is None.
+    """
+    if config_str is None:
+        return None
+    values = [int(x) for x in config_str.split(',')]
+    if len(values) == 3:
+        # Only NVL provided: num_sms, nvl_send_chunked_tokens, nvl_recv_chunked_tokens
+        num_sms, nvl_send, nvl_recv = values
+        rdma_send, rdma_recv = 6, 256
+    elif len(values) == 5:
+        num_sms, nvl_send, nvl_recv, rdma_send, rdma_recv = values
+    else:
+        raise ValueError(
+            f"Expected 3 or 5 values for deepep config, got {len(values)}. "
+            "Format: num_sms,nvl_send,nvl_recv[,rdma_send,rdma_recv]"
+        )
+    return (num_sms, nvl_send, nvl_recv, rdma_send, rdma_recv)
+
+
 def validate_args(args, defaults={}):
 
     # Temporary
@@ -1263,6 +1290,11 @@ def core_transformer_config_from_args(args, config_class=None):
 
     kw_args['inference_sampling_seed'] = args.seed
 
+    # Parse DeepEP configs from comma-separated strings to tuples
+    kw_args['moe_deepep_dispatch_config'] = _parse_deepep_config(args.moe_deepep_dispatch_config)
+    kw_args['moe_deepep_combine_config'] = _parse_deepep_config(args.moe_deepep_combine_config)
+    kw_args["moe_deepep_num_sms"] = args.moe_deepep_num_sms
+
     # handle quantization config
     # NOTE: Kitchen arguments are only added to the namespace when
     # Kitchen library is available.
@@ -1861,7 +1893,7 @@ def _add_rl_args(parser):
                        help="Use the RL training step.")
     group.add_argument('--rl-prompts-per-eval', type=int, default=32,
                        help='Number of prompts to evaluate for for each RL task.'
-                        'This evaluation can be very expensive when using environments' 
+                        'This evaluation can be very expensive when using environments'
                         'that evaluate pass@k so we default to a lower number.')
     # TODO(rkirby): allow for "complete" evaluation when --rl-prompts-per-eval is set to -1
     group.add_argument('--grpo-prompts-per-step', type=int, default=32,
@@ -3053,6 +3085,14 @@ def _add_moe_args(parser):
                        help='[Experimental] Enable DeepSeek/DeepEP for efficient token dispatching and combine in MoE models. Only works with flex token dispatcher by setting --moe-token-dispatcher-type=flex.')
     group.add_argument('--moe-deepep-num-sms', type=int, default=20,
                        help='Number of SMs to use for DeepEP.')
+    group.add_argument('--moe-deepep-dispatch-config', type=str, default=None,
+                       help='DeepEP dispatch config as comma-separated ints: '
+                            'num_sms,nvl_send,nvl_recv[,rdma_send,rdma_recv]. '
+                            'RDMA values default to 0 if not provided.')
+    group.add_argument('--moe-deepep-combine-config', type=str, default=None,
+                       help='DeepEP combine config as comma-separated ints: '
+                            'num_sms,nvl_send,nvl_recv[,rdma_send,rdma_recv]. '
+                            'RDMA values default to 0 if not provided.')
     group.add_argument('--moe-permute-fusion', action='store_true',
                        help='Fuse token rearrangement ops during token dispatching.')
     # Token dropping arguments

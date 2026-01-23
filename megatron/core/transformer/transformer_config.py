@@ -199,6 +199,16 @@ class TransformerConfig(ModelParallelConfig):
     moe_deepep_num_sms: int = 20
     """Number of SMs to use for DeepEP."""
 
+    moe_deepep_dispatch_config: Optional[Tuple[int, int, int, int, int]] = None
+    """DeepEP dispatch config: (num_sms, num_max_nvl_chunked_send_tokens,
+    num_max_nvl_chunked_recv_tokens, num_max_rdma_chunked_send_tokens,
+    num_max_rdma_chunked_recv_tokens). If None, uses DeepEP defaults."""
+
+    moe_deepep_combine_config: Optional[Tuple[int, int, int, int, int]] = None
+    """DeepEP combine config: (num_sms, num_max_nvl_chunked_send_tokens,
+    num_max_nvl_chunked_recv_tokens, num_max_rdma_chunked_send_tokens,
+    num_max_rdma_chunked_recv_tokens). If None, uses DeepEP defaults."""
+
     ####################
     # initialization
     ####################
