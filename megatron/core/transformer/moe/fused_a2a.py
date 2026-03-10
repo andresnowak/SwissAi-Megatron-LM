@@ -2,7 +2,6 @@
 # Portions of this code are from DeepSeek DeepEP project
 # Copyright (c) 2025 DeepSeek
 # Licensed under the MIT License - https://github.com/deepseek-ai/DeepEP/blob/main/LICENSE
-import dis
 
 
 try:
